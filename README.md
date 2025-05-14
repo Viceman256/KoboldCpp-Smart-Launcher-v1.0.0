@@ -19,7 +19,7 @@ python koboldcpp.py --model Qwen3-32B-Q4_K_M.gguf --threads 8 --usecublas --flas
 
 **With Smart Tensor Offloading:**
 ```bash
-python koboldcpp.py --model Qwen3-32B-Q4_K_M.gguf --threads 8 --usecublas --flashattention --gpulayers 65 --quantkv 1 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU"
+python koboldcpp.py --model Qwen3-32B-Q4_K_M.gguf --threads 8 --usecublas --flashattention --gpulayers 65 --quantkv 1 --overridetensors "\.([0-9]+)\.ffn_(up|gate)=CPU"
 ```
 `Tokens per second: 10.61 t/s`
 
@@ -40,6 +40,32 @@ python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --threads 6 --usecublas --fla
 `Tokens per second: 10.4 t/s`
 
 *Result: 52% speed improvement with the same VRAM usage!*
+
+### Example 3: QwQ Merge on 12GB VRAM GPU
+
+**Traditional Layer Offloading:**
+```bash
+python koboldcpp.py --threads 6 --usecublas --contextsize 40960 --flashattention --model QwQ_Merge.gguf --gpulayers 59 --quantkv 1
+```
+`Tokens per second: 3.95 t/s`
+
+**With Smart Tensor Offloading:**
+```bash
+python koboldcpp.py --threads 10 --usecublas --contextsize 40960 --flashattention --model QwQ_Merge.gguf --gpulayers 65 --quantkv 1 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU"
+```
+`Tokens per second: 10.61 t/s`
+
+*Result: Over 160% speed improvement while maintaining VRAM usage!*
+
+### Example 4: Qwen3-235B MoE on 48GB VRAM GPU
+
+**With Smart Tensor Offloading:**
+```bash
+python koboldcpp.py --model Qwen3-235B-IQ3_M.gguf --gpulayers 99 --contextsize 32768 --flashattention --usecublas --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
+```
+`Tokens per second: 7.6 t/s`
+
+*Result: Enables running an otherwise impossible model size on a single GPU!*
 
 ## 📋 Features
 
