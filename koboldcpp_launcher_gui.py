@@ -17,10 +17,9 @@ class KoboldLauncherGUI(ctk.CTk):
         super().__init__()
 
         self.title("KoboldCpp Smart Launcher (GUI Edition)")
-        self.geometry("950x780")  # Increased height slightly for new button
+        self.geometry("950x780") 
         self.minsize(850, 680)
 
-        # Grid configuration for proper layout
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -29,11 +28,16 @@ class KoboldLauncherGUI(ctk.CTk):
         self.system_info = core_init_results["system_info"]
         self.gpu_info = core_init_results["gpu_info"]
 
-        # Ensure model_specific_args key exists
         if "model_specific_args" not in self.config:
             self.config["model_specific_args"] = {}
-        if "model_specific_args" not in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE:  # Add to default template if not there
+        if "model_specific_args" not in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE:
             koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["model_specific_args"] = {}
+        
+        # Ensure all default_args keys from template are in config
+        for k_default, v_default in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].items():
+            if k_default not in self.config["default_args"]:
+                self.config["default_args"][k_default] = v_default
+
 
         self.current_model_path = None
         self.process_running = False
@@ -48,15 +52,15 @@ class KoboldLauncherGUI(ctk.CTk):
         self.koboldcpp_executable = self.config.get("koboldcpp_executable", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["koboldcpp_executable"])
 
         self.tuning_in_progress = False
-        self.current_tuning_attempt_level = 0  # This is the OT level for the *next* attempt or current display
+        self.current_tuning_attempt_level = 0
         self.current_tuning_min_level = 0
         self.current_tuning_max_level = 0
         self.current_tuning_session_base_args = {}
         self.current_tuning_model_analysis = {}
         self.current_tuning_model_path = None
-        self.level_of_last_monitored_run = 0  # Store the OT level of the run that just finished monitoring
-        self.current_command_list_for_db = []  # Add this line
-        self.vram_at_decision_for_db = None  # Add this line
+        self.level_of_last_monitored_run = 0
+        self.current_command_list_for_db = []
+        self.vram_at_decision_for_db = None
 
         self.kcpp_monitor_thread = None
         self.kcpp_process_obj = None
@@ -64,14 +68,12 @@ class KoboldLauncherGUI(ctk.CTk):
         self.kcpp_oom_event = threading.Event()
         self.kcpp_output_lines_shared = []
         self.last_approx_vram_used_kcpp_mb = None
-        self.last_free_vram_after_load_mb = None  # For VRAM stats display
+        self.last_free_vram_after_load_mb = None
 
-        # Set appearance mode from config
         appearance_mode = self.config.get("color_mode", "dark").lower()
         ctk.set_appearance_mode(appearance_mode)
         ctk.set_default_color_theme("blue")
 
-        # Create tabview and tabs FIRST
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
@@ -85,9 +87,8 @@ class KoboldLauncherGUI(ctk.CTk):
             tab.grid_columnconfigure(0, weight=1)
             tab.grid_rowconfigure(0, weight=1)
 
-        # NOW setup the tabs
-        self.setup_settings_tab()  # Initialize self.settings_widgets
-        self.load_settings_from_config()  # Load global defaults into settings tab
+        self.setup_settings_tab()
+        self.load_settings_from_config()
         self.setup_main_tab()
         self.setup_history_tab()
 
@@ -98,7 +99,6 @@ class KoboldLauncherGUI(ctk.CTk):
         self._show_model_selection_view()
 
     def _get_merged_args_for_model(self, model_path):
-        # Priority: Core Defaults <- Global Config Defaults <- Model Specific Defaults
         merged_args = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
         merged_args.update(self.config.get("default_args", {}))
         if model_path:
@@ -107,8 +107,6 @@ class KoboldLauncherGUI(ctk.CTk):
         return merged_args
 
     def _reinitialize_session_base_args(self):
-        # This function sets self.current_tuning_session_base_args
-        # It filters for "active" args (True bools, non-empty strings)
         if not self.current_tuning_model_path:
             effective_args = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
             effective_args.update(self.config.get("default_args", {}))
@@ -123,14 +121,13 @@ class KoboldLauncherGUI(ctk.CTk):
                 elif v_raw.lower() == 'false': v = False
 
             if isinstance(v, bool):
-                if v:
+                if v: # Only add if True for boolean flags that are just flags
                     self.current_tuning_session_base_args[k] = True
             elif isinstance(v, str) and v.strip():
                 self.current_tuning_session_base_args[k] = v.strip()
             elif not isinstance(v, str) and v is not None :
                 self.current_tuning_session_base_args[k] = v
         self.log_to_console(f"Session base args reinitialized for {os.path.basename(self.current_tuning_model_path or 'No Model')}")
-
 
     def check_koboldcpp_executable(self):
         if not os.path.exists(self.koboldcpp_executable):
@@ -150,8 +147,15 @@ class KoboldLauncherGUI(ctk.CTk):
             self.log_to_console(f"KoboldCPP executable '{self.koboldcpp_executable}' found at specified path.")
       
     def load_settings_from_config(self):
+        # Ensure all default_args keys from template exist in config
+        for k_default, v_default in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].items():
+            if k_default not in self.config["default_args"]:
+                self.config["default_args"][k_default] = v_default
+
         global_default_args = self.config.get("default_args", {})
-        for param, widget in self.settings_widgets.items():
+        
+        for param, widget_info in self.settings_widgets.items():
+            widget = widget_info["widget"]
             value_from_config = global_default_args.get(param)
             core_default_for_param = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].get(param)
             final_value_to_set = value_from_config if value_from_config is not None else core_default_for_param
@@ -160,7 +164,7 @@ class KoboldLauncherGUI(ctk.CTk):
                 widget.delete(0, "end")
                 if final_value_to_set is not None:
                     widget.insert(0, str(final_value_to_set))
-            elif hasattr(widget, "variable"):
+            elif hasattr(widget, "variable"): # CheckBox
                 val_to_set_bool = False
                 if isinstance(final_value_to_set, bool):
                     val_to_set_bool = final_value_to_set
@@ -172,12 +176,8 @@ class KoboldLauncherGUI(ctk.CTk):
             self.exe_path_entry.delete(0, "end")
             self.exe_path_entry.insert(0, self.koboldcpp_executable)
 
-        # Load the auto_open_webui setting
-        if hasattr(self, 'auto_open_webui_var'): # Check if widget exists
-            self.auto_open_webui_var.set(self.config.get("auto_open_webui", True)) # Default to True if not found
-
-    
-
+        if hasattr(self, 'auto_open_webui_var'):
+            self.auto_open_webui_var.set(self.config.get("auto_open_webui", True))
 
     def save_config(self):
         if hasattr(self, 'exe_path_entry') and self.exe_path_entry.winfo_exists():
@@ -187,18 +187,17 @@ class KoboldLauncherGUI(ctk.CTk):
         self.config["db_file"] = self.db_path
         self.config["color_mode"] = ctk.get_appearance_mode().lower()
         
-        # Save the auto_open_webui setting <--- NEW
         if hasattr(self, 'auto_open_webui_var'):
             self.config["auto_open_webui"] = self.auto_open_webui_var.get()
-        else: # Fallback if widget not created yet, retain existing or default
+        else:
             self.config["auto_open_webui"] = self.config.get("auto_open_webui", True)
 
-
         current_global_default_args = self.config.get("default_args", {})
-        for param, widget in self.settings_widgets.items():
+        for param, widget_info in self.settings_widgets.items():
+            widget = widget_info["widget"]
             if isinstance(widget, ctk.CTkEntry):
                 current_global_default_args[param] = widget.get().strip()
-            elif hasattr(widget, "variable"):
+            elif hasattr(widget, "variable"): # CheckBox
                 current_global_default_args[param] = widget.variable.get()
         self.config["default_args"] = current_global_default_args
 
@@ -216,55 +215,66 @@ class KoboldLauncherGUI(ctk.CTk):
         return success
 
     def setup_main_tab(self):
-        self.tab_main.grid_rowconfigure(0, weight=1)
+        self.tab_main.grid_rowconfigure(0, weight=1) # Ensure main_tab itself can resize
+        # Model Selection View (initially visible)
         self.model_selection_frame = ctk.CTkFrame(self.tab_main)
         self.model_selection_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
-        self.model_selection_frame.grid_columnconfigure(0, weight=1)
-        self.model_selection_frame.grid_rowconfigure(5, weight=1)
+        self.model_selection_frame.grid_columnconfigure(0, weight=1) # Allow content to expand width-wise
+        self.model_selection_frame.grid_rowconfigure(5, weight=1) # Allow console to expand height-wise
+
         title_label = ctk.CTkLabel(self.model_selection_frame, text="KoboldCpp Model Launcher", font=ctk.CTkFont(size=20, weight="bold"))
         title_label.grid(row=0, column=0, columnspan=3, padx=10, pady=(10, 15), sticky="n")
+
         model_controls_frame = ctk.CTkFrame(self.model_selection_frame)
         model_controls_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         model_controls_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(model_controls_frame, text="GGUF Model:").grid(row=0, column=0, padx=(10, 5), pady=10, sticky="w")
+        ctk.CTkLabel(model_controls_frame, text="GGUF Model:").grid(row=0, column=0, padx=(10,5), pady=10, sticky="w")
         self.model_path_entry = ctk.CTkEntry(model_controls_frame, width=400)
         self.model_path_entry.grid(row=0, column=1, padx=5, pady=10, sticky="ew")
-        ctk.CTkButton(model_controls_frame, text="Browse", command=self.browse_model).grid(row=0, column=2, padx=(5, 10), pady=10, sticky="e")
+        ctk.CTkButton(model_controls_frame, text="Browse", command=self.browse_model).grid(row=0, column=2, padx=(5,10), pady=10, sticky="e")
         self.model_info_label = ctk.CTkLabel(model_controls_frame, text="No model selected", justify="left")
-        self.model_info_label.grid(row=1, column=0, columnspan=3, padx=10, pady=(0, 10), sticky="w")
+        self.model_info_label.grid(row=1, column=0, columnspan=3, padx=10, pady=(0,10), sticky="w")
+
         vram_frame = ctk.CTkFrame(self.model_selection_frame)
         vram_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
-        vram_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(vram_frame, text="GPU VRAM Status:").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.vram_progress = ctk.CTkProgressBar(vram_frame, height=18)
+        vram_frame.grid_columnconfigure(1, weight=1) # ProgressBar takes available width
+        ctk.CTkLabel(vram_frame, text="GPU VRAM Status:").grid(row=0, column=0, padx=(10,5), pady=5, sticky="w")
+        self.vram_progress = ctk.CTkProgressBar(vram_frame, height=18) # Slightly taller
         self.vram_progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.vram_progress.set(0)
         self.vram_text = ctk.CTkLabel(vram_frame, text="Scanning...")
-        self.vram_text.grid(row=0, column=2, padx=(5, 10), pady=5, sticky="e")
-        ctk.CTkButton(vram_frame, text="Refresh", width=60, command=self.refresh_vram).grid(row=0, column=3, padx=(5, 10), pady=5, sticky="e")
+        self.vram_text.grid(row=0, column=2, padx=(5,10), pady=5, sticky="e")
+        ctk.CTkButton(vram_frame, text="Refresh", width=60, command=self.refresh_vram).grid(row=0, column=3, padx=(5,10), pady=5, sticky="e")
+
         launch_buttons_frame = ctk.CTkFrame(self.model_selection_frame)
         launch_buttons_frame.grid(row=3, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
-        launch_buttons_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        launch_buttons_frame.grid_columnconfigure((0,1,2), weight=1) # Distribute space among buttons
         ctk.CTkButton(launch_buttons_frame, text="Start Auto-Tune / Use OT Strategy", command=self.start_tuning_session, height=35, fg_color="seagreen", hover_color="darkgreen").grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         ctk.CTkButton(launch_buttons_frame, text="Launch Best Remembered Config", command=self.launch_best_remembered, height=35, fg_color="cornflowerblue", hover_color="royalblue").grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         ctk.CTkButton(launch_buttons_frame, text="Direct Launch (Settings Defaults)", command=self.launch_direct_defaults, height=35).grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+
         stop_button_frame = ctk.CTkFrame(self.model_selection_frame)
-        stop_button_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=(0, 5), sticky="ew")
+        stop_button_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=(0,5), sticky="ew")
         stop_button_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(stop_button_frame, text="Stop Any KCPP Processes", command=self.stop_all_kcpp_processes_forcefully, height=35, fg_color="firebrick", hover_color="darkred").grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        console_frame_ms = ctk.CTkFrame(self.model_selection_frame)
+
+        console_frame_ms = ctk.CTkFrame(self.model_selection_frame) # Console for model selection view
         console_frame_ms.grid(row=5, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-        console_frame_ms.grid_columnconfigure(0, weight=1)
-        console_frame_ms.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(console_frame_ms, text="Launcher Log:").grid(row=0, column=0, padx=10, pady=(5, 0), sticky="w")
-        self.console = ctk.CTkTextbox(console_frame_ms, height=100)
-        self.console.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="nsew")
+        console_frame_ms.grid_columnconfigure(0, weight=1); console_frame_ms.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(console_frame_ms, text="Launcher Log:").grid(row=0, column=0, padx=10, pady=(5,0), sticky="w")
+        self.console = ctk.CTkTextbox(console_frame_ms, height=100) # Min height for console
+        self.console.grid(row=1, column=0, padx=10, pady=(0,5), sticky="nsew")
         self.console.configure(state="disabled")
-        self.tuning_mode_frame = ctk.CTkFrame(self.tab_main)
-        self.tuning_mode_frame.grid_columnconfigure(0, weight=1)
-        self.tuning_mode_frame.grid_rowconfigure(7, weight=1)
+
+        # Tuning Mode View (initially hidden)
+        self.tuning_mode_frame = ctk.CTkFrame(self.tab_main) # Parent is tab_main
+        # NO grid() call here initially for tuning_mode_frame
+        self.tuning_mode_frame.grid_columnconfigure(0, weight=1) # Allow content to expand width-wise
+        self.tuning_mode_frame.grid_rowconfigure(7, weight=1) # Allow KCPP output console to expand
+
         tuning_title_label = ctk.CTkLabel(self.tuning_mode_frame, text="Auto-Tuning Session", font=ctk.CTkFont(size=18, weight="bold"))
         tuning_title_label.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+
         ot_strategy_display_frame = ctk.CTkFrame(self.tuning_mode_frame)
         ot_strategy_display_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         ot_strategy_display_frame.grid_columnconfigure(1, weight=1)
@@ -279,6 +289,7 @@ class KoboldLauncherGUI(ctk.CTk):
         self.tuning_ot_regex_label.grid(row=4, column=0, columnspan=2, padx=10, pady=1, sticky="w")
         self.tuning_gpu_layers_label = ctk.CTkLabel(ot_strategy_display_frame, text="GPU Layers: N/A", justify="left", wraplength=600)
         self.tuning_gpu_layers_label.grid(row=5, column=0, columnspan=2, padx=10, pady=1, sticky="w")
+
         proposed_command_frame = ctk.CTkFrame(self.tuning_mode_frame)
         proposed_command_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         proposed_command_frame.grid_columnconfigure(0, weight=1)
@@ -286,42 +297,46 @@ class KoboldLauncherGUI(ctk.CTk):
         self.tuning_proposed_command_text = ctk.CTkTextbox(proposed_command_frame, height=120, wrap="word")
         self.tuning_proposed_command_text.grid(row=1, column=0, padx=5, pady=2, sticky="nsew")
         self.tuning_proposed_command_text.configure(state="disabled")
+
         self.tuning_actions_primary_frame = ctk.CTkFrame(self.tuning_mode_frame)
         self.tuning_actions_primary_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
-        self.tuning_actions_primary_frame.grid_columnconfigure((0, 1), weight=1)
+        self.tuning_actions_primary_frame.grid_columnconfigure((0,1), weight=1)
         self.btn_tune_launch_monitor = ctk.CTkButton(self.tuning_actions_primary_frame, text="Launch & Monitor Output", command=self.launch_and_monitor_for_tuning, height=35, fg_color="seagreen", hover_color="darkgreen")
         self.btn_tune_launch_monitor.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_tune_skip_launch_direct = ctk.CTkButton(self.tuning_actions_primary_frame, text="Skip Tune & Launch This Config", command=self.skip_tune_and_launch_direct, height=35)
         self.btn_tune_skip_launch_direct.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
         self.tuning_actions_secondary_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.tuning_actions_secondary_frame.grid(row=4, column=0, padx=10, pady=0, sticky="ew")
-        self.tuning_actions_secondary_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.tuning_actions_secondary_frame.grid(row=4, column=0, padx=10, pady=0, sticky="ew") # pady reduced
+        self.tuning_actions_secondary_frame.grid_columnconfigure((0,1,2), weight=1)
         self.btn_tune_more_gpu = ctk.CTkButton(self.tuning_actions_secondary_frame, text="More GPU (↓ Level)", command=lambda: self.adjust_ot_level(-1))
         self.btn_tune_more_gpu.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_tune_more_cpu = ctk.CTkButton(self.tuning_actions_secondary_frame, text="More CPU (↑ Level)", command=lambda: self.adjust_ot_level(1))
         self.btn_tune_more_cpu.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.btn_tune_edit_args = ctk.CTkButton(self.tuning_actions_secondary_frame, text="Edit Base Args (Session)", command=self.edit_base_args_for_tuning_session)
         self.btn_tune_edit_args.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+
         self.tuning_model_config_frame = ctk.CTkFrame(self.tuning_mode_frame)
         self.tuning_model_config_frame.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
-        self.tuning_model_config_frame.grid_columnconfigure(0, weight=1)
+        self.tuning_model_config_frame.grid_columnconfigure(0, weight=1) # Single button, full width
         self.btn_tune_edit_model_perm_args = ctk.CTkButton(self.tuning_model_config_frame, text="Edit Base Args (Permanent for This Model)", command=self.edit_permanent_model_args)
         self.btn_tune_edit_model_perm_args.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+
         self.tuning_actions_navigation_frame = ctk.CTkFrame(self.tuning_mode_frame)
         self.tuning_actions_navigation_frame.grid(row=6, column=0, padx=10, pady=5, sticky="ew")
-        self.tuning_actions_navigation_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.tuning_actions_navigation_frame.grid_columnconfigure((0,1,2), weight=1)
         self.btn_tune_new_gguf = ctk.CTkButton(self.tuning_actions_navigation_frame, text="New GGUF Model", command=self.select_new_gguf_during_tuning)
         self.btn_tune_new_gguf.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         self.btn_tune_history = ctk.CTkButton(self.tuning_actions_navigation_frame, text="View History", command=lambda: self.tabview.set("History"))
         self.btn_tune_history.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.btn_tune_quit_tuning = ctk.CTkButton(self.tuning_actions_navigation_frame, text="End Tuning Session", command=self.end_tuning_session, fg_color="firebrick", hover_color="darkred")
         self.btn_tune_quit_tuning.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+        
         self.kcpp_output_console_frame = ctk.CTkFrame(self.tuning_mode_frame)
         self.kcpp_output_console_frame.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
-        self.kcpp_output_console_frame.grid_columnconfigure(0, weight=1)
-        self.kcpp_output_console_frame.grid_rowconfigure(1, weight=1)
+        self.kcpp_output_console_frame.grid_columnconfigure(0, weight=1); self.kcpp_output_console_frame.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(self.kcpp_output_console_frame, text="KoboldCpp Output (during monitoring):").grid(row=0, column=0, padx=5, pady=2, sticky="w")
-        self.kcpp_live_output_text = ctk.CTkTextbox(self.kcpp_output_console_frame, wrap="char")
+        self.kcpp_live_output_text = ctk.CTkTextbox(self.kcpp_output_console_frame, wrap="char") # wrap="none" or "char"
         self.kcpp_live_output_text.grid(row=1, column=0, padx=5, pady=2, sticky="nsew")
         self.kcpp_live_output_text.configure(state="disabled")
 
@@ -357,9 +372,9 @@ class KoboldLauncherGUI(ctk.CTk):
         self._reinitialize_session_base_args()
 
         if self.current_tuning_model_analysis.get('is_moe'):
-            self.current_tuning_min_level, self.current_tuning_max_level, initial_heuristic_level = -16, 1, -10
+            self.current_tuning_min_level, self.current_tuning_max_level, initial_heuristic_level = -25, 10, -10 # Expanded MoE range
         else:
-            self.current_tuning_min_level, self.current_tuning_max_level = -8, 0
+            self.current_tuning_min_level, self.current_tuning_max_level = -17, 9 # Expanded Dense range
             size_b = self.current_tuning_model_analysis.get('size_b', 0)
             if isinstance(size_b, (int, float)):
                 if size_b >= 30: initial_heuristic_level = -3
@@ -373,10 +388,21 @@ class KoboldLauncherGUI(ctk.CTk):
         if best_hist_config and "attempt_level" in best_hist_config:
             self.log_to_console(f"Found historical config. Level: {best_hist_config['attempt_level']}, Outcome: {best_hist_config['outcome']}")
             hist_level, hist_outcome = best_hist_config['attempt_level'], best_hist_config.get('outcome', "")
-            if hist_outcome.startswith("SUCCESS_LOAD_VRAM_OK") or hist_outcome.startswith("SUCCESS_USER_CONFIRMED_AUTO_OK"):
-                initial_heuristic_level = max(self.current_tuning_min_level, hist_level - 1)
+            if hist_outcome.startswith("SUCCESS_LOAD_VRAM_OK") or hist_outcome.startswith("SUCCESS_USER_CONFIRMED_AUTO_OK") or hist_outcome.endswith("_USER_SAVED_GOOD_MORE_GPU"):
+                initial_heuristic_level = max(self.current_tuning_min_level, hist_level - 1) # Start one level lower (more GPU)
+            elif hist_outcome.endswith("_USER_ACCEPTED_AUTO_ADJUST_CPU") or hist_outcome.endswith("_USER_TRIED_MORE_CPU_AFTER_FAIL"):
+                 initial_heuristic_level = min(self.current_tuning_max_level, hist_level + 1) # Start one level higher (more CPU)
             else: initial_heuristic_level = hist_level
             self.log_to_console(f"Adapted historical level to start at: {initial_heuristic_level}")
+            # Apply args from historical config to session base
+            remembered_args_list = best_hist_config.get("args_list", [])
+            if remembered_args_list:
+                remembered_args_dict = koboldcpp_core.args_list_to_dict(remembered_args_list)
+                remembered_args_dict.pop("--model", None) # Don't override current model
+                remembered_args_dict.pop("--overridetensors", None) # OT string is generated by level
+                self.current_tuning_session_base_args.update(remembered_args_dict)
+                self.log_to_console("Applied remembered arguments to current session base.")
+
         else:
             self.log_to_console(f"No suitable historical config. Starting with heuristic level: {initial_heuristic_level}")
 
@@ -394,11 +420,9 @@ class KoboldLauncherGUI(ctk.CTk):
         ot_string = koboldcpp_core.generate_overridetensors(self.current_tuning_model_analysis, self.current_tuning_attempt_level)
         description = koboldcpp_core.get_offload_description(self.current_tuning_model_analysis, self.current_tuning_attempt_level, ot_string)
     
-        # Update GPU layers info
         gpu_layers = koboldcpp_core.get_gpu_layers_for_level(self.current_tuning_model_analysis, self.current_tuning_attempt_level)
         total_layers = self.current_tuning_model_analysis.get('num_layers', 32)
     
-        # Update GUI labels
         if hasattr(self, 'tuning_ot_level_label') and self.tuning_ot_level_label.winfo_exists():
             self.tuning_ot_level_label.configure(text=f"Level: {self.current_tuning_attempt_level}")
     
@@ -414,11 +438,9 @@ class KoboldLauncherGUI(ctk.CTk):
         if hasattr(self, 'tuning_ot_regex_label') and self.tuning_ot_regex_label.winfo_exists():
             self.tuning_ot_regex_label.configure(text=f"Regex: {regex_display}")
     
-        # Update the GPU layers label
         if hasattr(self, 'tuning_gpu_layers_label') and self.tuning_gpu_layers_label.winfo_exists():
             self.tuning_gpu_layers_label.configure(text=f"GPU Layers: {gpu_layers}/{total_layers}")
     
-        # Build and display command
         args_for_kcpp_list = koboldcpp_core.build_command(
             self.current_tuning_model_path, 
             ot_string, 
@@ -434,7 +456,6 @@ class KoboldLauncherGUI(ctk.CTk):
             self.tuning_proposed_command_text.insert("1.0", display_command_str)
             self.tuning_proposed_command_text.configure(state="disabled")
     
-        # Update button states
         if hasattr(self, 'btn_tune_more_gpu') and self.btn_tune_more_gpu.winfo_exists():
             self.btn_tune_more_gpu.configure(state="normal" if self.current_tuning_attempt_level > self.current_tuning_min_level else "disabled")
     
@@ -454,49 +475,90 @@ class KoboldLauncherGUI(ctk.CTk):
         temp_arg_widgets = {}
         for setting_def in param_definitions_list:
             param = setting_def["param"]
-            current_val_for_field = current_args_dict_for_dialog.get(param)
+            current_val_for_field = current_args_dict_for_dialog.get(param) # This is the effective value
+            
             frame = ctk.CTkFrame(scrollable_frame); frame.pack(fill="x", pady=2)
-            ctk.CTkLabel(frame, text=f"{setting_def['name']}:", width=150, anchor="w").pack(side="left", padx=5)
-            is_bool_default_type = isinstance(koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].get(param), bool)
+            ctk.CTkLabel(frame, text=f"{setting_def['name']}:", width=160, anchor="w").pack(side="left", padx=5) # Increased width
+            
+            # Determine if the parameter is a boolean type from core defaults
+            # This check needs to be robust, as some bools might be 'True'/'False' strings initially
+            core_default_val = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].get(param)
+            is_bool_default_type = isinstance(core_default_val, bool) or \
+                                   (isinstance(core_default_val, str) and core_default_val.lower() in ['true', 'false']) or \
+                                   setting_def.get("type") == "bool" # Explicit type from definition
+            
             if is_bool_default_type:
-                bool_val = False
-                if isinstance(current_val_for_field, bool): bool_val = current_val_for_field
-                elif isinstance(current_val_for_field, str) and current_val_for_field.lower() == 'true': bool_val = True
-                var = ctk.BooleanVar(value=bool_val)
+                # Determine initial checkbox state from current_val_for_field
+                bool_val_to_set = False
+                if isinstance(current_val_for_field, bool):
+                    bool_val_to_set = current_val_for_field
+                elif isinstance(current_val_for_field, str):
+                    bool_val_to_set = current_val_for_field.lower() == 'true'
+                
+                var = ctk.BooleanVar(value=bool_val_to_set)
                 widget = ctk.CTkCheckBox(frame, text="", variable=var); widget.pack(side="left", padx=5)
-                widget.variable = var; temp_arg_widgets[param] = widget
-            else:
-                entry = ctk.CTkEntry(frame)
-                if current_val_for_field is not None: entry.insert(0, str(current_val_for_field))
-                entry.pack(side="left", padx=5, fill="x", expand=True); temp_arg_widgets[param] = entry
+                widget.variable = var; temp_arg_widgets[param] = {"widget": widget, "type": "bool"}
+            else: # Entry for string/number/auto
+                entry = ctk.CTkEntry(frame, width=150) # Set a fixed width for entries
+                if current_val_for_field is not None:
+                    entry.insert(0, str(current_val_for_field))
+                entry.pack(side="left", padx=5, fill="x", expand=False); # expand=False for fixed width
+                temp_arg_widgets[param] = {"widget": entry, "type": "str_num"}
+            
+            # Add help text label
+            ctk.CTkLabel(frame, text=setting_def.get("help", ""), font=ctk.CTkFont(size=10), text_color="gray").pack(side="left", padx=5, fill="x", expand=True)
+
         return temp_arg_widgets
+
+
+    def _get_param_definitions_for_dialog(self):
+        # Centralized list for dialogs, matching settings tab order as much as possible
+        return [
+            {"name": "Threads", "param": "--threads", "help": "CPU threads ('auto' or number)."},
+            {"name": "BLAS Threads (nblas)", "param": "--nblas", "help": "BLAS threads ('auto' or number)."},
+            {"name": "Context Size", "param": "--contextsize", "help": "Max context tokens (e.g., 4096, 16384)."},
+            {"name": "Prompt Limit", "param": "--promptlimit", "help": "Max prompt tokens (<= contextsize)."},
+            {"name": "GPU Layers", "param": "--gpulayers", "help": "Layers on GPU. 'off', 0 for CPU. 999 for max."},
+            {"name": "Use CUBLAS", "param": "--usecublas", "help": "Enable CUDA BLAS (NVIDIA).", "type": "bool"},
+            {"name": "Flash Attention", "param": "--flashattention", "help": "Enable FlashAttention.", "type": "bool"},
+            {"name": "No Memory Map", "param": "--nommap", "help": "Disable memory mapping.", "type": "bool"},
+            {"name": "Low VRAM Mode", "param": "--lowvram", "help": "Enable low VRAM mode.", "type": "bool"},
+            {"name": "QuantKV", "param": "--quantkv", "help": "K/V cache quant ('auto', 'off', or number)."},
+            {"name": "BLAS Batch Size", "param": "--blasbatchsize", "help": "BLAS batch size ('auto', 'off', or number)."},
+            {"name": "Port", "param": "--port", "help": "Web UI port (default 5000)."},
+            {"name": "Default Gen Amount", "param": "--defaultgenamt", "help": "Default tokens to generate."}
+        ]
 
     def edit_base_args_for_tuning_session(self):
         if not self.tuning_in_progress: return
         dialog = ctk.CTkToplevel(self); dialog.title("Edit Base Arguments for This Session")
-        dialog.geometry("600x550"); dialog.transient(self); dialog.grab_set()
-        param_definitions = [
-            {"name": "Threads", "param": "--threads"}, {"name": "Context Size", "param": "--contextsize"},
-            {"name": "Prompt Limit", "param": "--promptlimit"}, {"name": "Use CUBLAS", "param": "--usecublas"},
-            {"name": "Flash Attention", "param": "--flashattention"}, {"name": "Port", "param": "--port"},
-            {"name": "GPU Layers", "param": "--gpulayers"}, {"name": "QuantKV", "param": "--quantkv"},
-            {"name": "BLAS Batch Size", "param": "--blasbatchsize"}, {"name": "Default Gen Amount", "param": "--defaultgenamt"}
-        ]
+        dialog.geometry("750x650"); dialog.transient(self); dialog.grab_set() # Increased size
+        
+        param_definitions = self._get_param_definitions_for_dialog()
+        
         full_merged_for_display = self._get_merged_args_for_model(self.current_tuning_model_path)
         display_args_in_dialog = full_merged_for_display.copy()
-        display_args_in_dialog.update(self.current_tuning_session_base_args)
-        temp_arg_widgets = self._create_args_dialog_content(dialog, display_args_in_dialog, param_definitions)
+        display_args_in_dialog.update(self.current_tuning_session_base_args) # Apply session overrides on top for display
+        
+        temp_arg_widgets_info = self._create_args_dialog_content(dialog, display_args_in_dialog, param_definitions)
+        
         def save_session_args_action():
-            for param, widget in temp_arg_widgets.items():
-                if isinstance(widget, ctk.CTkEntry):
+            for param, info_dict in temp_arg_widgets_info.items():
+                widget = info_dict["widget"]
+                widget_type = info_dict["type"]
+                if widget_type == "str_num": # Entry
                     val_str = widget.get().strip()
                     if val_str: self.current_tuning_session_base_args[param] = val_str
-                    elif param in self.current_tuning_session_base_args: del self.current_tuning_session_base_args[param]
-                elif hasattr(widget, "variable"):
+                    elif param in self.current_tuning_session_base_args: del self.current_tuning_session_base_args[param] # Unset if empty
+                elif widget_type == "bool": # CheckBox
                     if widget.variable.get(): self.current_tuning_session_base_args[param] = True
-                    elif param in self.current_tuning_session_base_args: del self.current_tuning_session_base_args[param]
+                    else: # If unchecked, it means False for boolean flags
+                        self.current_tuning_session_base_args[param] = False 
+                        # Or, if you want unchecking to revert to global/default, then:
+                        # if param in self.current_tuning_session_base_args: del self.current_tuning_session_base_args[param]
             self.log_to_console("Base arguments for this tuning session updated.")
             self.update_tuning_display(); dialog.destroy()
+            
         button_frame = ctk.CTkFrame(dialog); button_frame.pack(fill="x", pady=10)
         ctk.CTkButton(button_frame, text="Save Session Args", command=save_session_args_action).pack(side="left", padx=10)
         ctk.CTkButton(button_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=10)
@@ -508,47 +570,64 @@ class KoboldLauncherGUI(ctk.CTk):
             return
         dialog = ctk.CTkToplevel(self)
         dialog.title(f"Edit Permanent Args for: {os.path.basename(self.current_tuning_model_path)}")
-        dialog.geometry("600x550"); dialog.transient(self); dialog.grab_set()
-        param_definitions = [
-            {"name": "Threads", "param": "--threads"}, {"name": "Context Size", "param": "--contextsize"},
-            {"name": "Prompt Limit", "param": "--promptlimit"}, {"name": "Use CUBLAS", "param": "--usecublas"},
-            {"name": "Flash Attention", "param": "--flashattention"}, {"name": "Port", "param": "--port"},
-            {"name": "GPU Layers", "param": "--gpulayers"}, {"name": "QuantKV", "param": "--quantkv"},
-            {"name": "BLAS Batch Size", "param": "--blasbatchsize"}, {"name": "Default Gen Amount", "param": "--defaultgenamt"}
-        ]
+        dialog.geometry("750x650"); dialog.transient(self); dialog.grab_set() # Increased size
+        
+        param_definitions = self._get_param_definitions_for_dialog()
+        
+        # For permanent edits, we display the currently effective args (global + model-specific)
         args_to_display_in_dialog = self._get_merged_args_for_model(self.current_tuning_model_path)
-        temp_arg_widgets = self._create_args_dialog_content(dialog, args_to_display_in_dialog, param_definitions)
+        temp_arg_widgets_info = self._create_args_dialog_content(dialog, args_to_display_in_dialog, param_definitions)
+        
         def save_permanent_args_action():
             model_path_key = self.current_tuning_model_path
             if model_path_key not in self.config["model_specific_args"]:
                 self.config["model_specific_args"][model_path_key] = {}
             current_model_specifics = self.config["model_specific_args"][model_path_key]
-            global_defaults = self._get_merged_args_for_model(None)
-            for param, widget in temp_arg_widgets.items():
-                is_bool_type = isinstance(global_defaults.get(param), bool) or \
-                               (isinstance(global_defaults.get(param), str) and global_defaults.get(param,"").lower() in ['true', 'false'])
-                current_global_default_for_param = global_defaults.get(param)
-                if is_bool_type and isinstance(current_global_default_for_param, str):
-                    current_global_default_for_param = current_global_default_for_param.lower() == 'true'
-                if isinstance(widget, ctk.CTkEntry):
-                    val_str = widget.get().strip()
-                    if not val_str:
+            
+            # Get baseline (Core Defaults + Global Config Defaults), NO session args
+            global_baseline_args = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+            global_baseline_args.update(self.config.get("default_args", {}))
+
+            for param, info_dict in temp_arg_widgets_info.items():
+                widget = info_dict["widget"]
+                widget_type = info_dict["type"]
+                
+                current_global_baseline_for_param = global_baseline_args.get(param)
+                
+                if widget_type == "str_num": # Entry
+                    val_str_from_dialog = widget.get().strip()
+                    if not val_str_from_dialog: # Empty input means revert to global baseline
                         if param in current_model_specifics: del current_model_specifics[param]
                     else:
-                        if str(val_str) != str(current_global_default_for_param): current_model_specifics[param] = val_str
-                        elif param in current_model_specifics: del current_model_specifics[param]
-                elif hasattr(widget, "variable"):
-                    val_bool = widget.variable.get()
-                    if val_bool != current_global_default_for_param: current_model_specifics[param] = val_bool
-                    elif param in current_model_specifics: del current_model_specifics[param]
-            if not self.config["model_specific_args"][model_path_key]:
+                        # Convert to baseline type for comparison if possible (e.g. bools as strings)
+                        global_baseline_str = str(current_global_baseline_for_param) if current_global_baseline_for_param is not None else ""
+                        if isinstance(current_global_baseline_for_param, bool): global_baseline_str = str(current_global_baseline_for_param).lower()
+                        
+                        if val_str_from_dialog.lower() != global_baseline_str:
+                            current_model_specifics[param] = val_str_from_dialog
+                        elif param in current_model_specifics: # Value matches global, remove specific
+                            del current_model_specifics[param]
+                elif widget_type == "bool": # CheckBox
+                    val_bool_from_dialog = widget.variable.get()
+                    global_baseline_bool = False
+                    if isinstance(current_global_baseline_for_param, bool): global_baseline_bool = current_global_baseline_for_param
+                    elif isinstance(current_global_baseline_for_param, str): global_baseline_bool = current_global_baseline_for_param.lower() == 'true'
+                    
+                    if val_bool_from_dialog != global_baseline_bool:
+                        current_model_specifics[param] = val_bool_from_dialog
+                    elif param in current_model_specifics: # Value matches global, remove specific
+                        del current_model_specifics[param]
+
+            if not self.config["model_specific_args"][model_path_key]: # Clean up if no specifics left
                 del self.config["model_specific_args"][model_path_key]
+                
             if self.save_config():
                 self.log_to_console(f"Permanent arguments saved for model: {os.path.basename(model_path_key)}")
-                self._reinitialize_session_base_args()
+                self._reinitialize_session_base_args() # Session args should now reflect the new permanent base
                 self.update_tuning_display()
             else: self.log_to_console(f"Failed to save permanent arguments for model.")
             dialog.destroy()
+            
         button_frame = ctk.CTkFrame(dialog); button_frame.pack(fill="x", pady=10)
         ctk.CTkButton(button_frame, text="Save Permanent Args", command=save_permanent_args_action).pack(side="left", padx=10)
         ctk.CTkButton(button_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=10)
@@ -592,18 +671,16 @@ class KoboldLauncherGUI(ctk.CTk):
         self.kcpp_oom_event.clear()
         self.kcpp_output_lines_shared.clear()
         self.last_free_vram_after_load_mb = None
-        self.level_of_last_monitored_run = self.current_tuning_attempt_level  # Store level for this run
+        self.level_of_last_monitored_run = self.current_tuning_attempt_level
 
         ot_string = koboldcpp_core.generate_overridetensors(self.current_tuning_model_analysis, self.current_tuning_attempt_level)
         args_for_kcpp_list = koboldcpp_core.build_command(
             self.current_tuning_model_path, ot_string, self.current_tuning_model_analysis, self.current_tuning_session_base_args
         )
         
-        # Store these values properly before trying to use them
         self.current_command_list_for_db = koboldcpp_core.get_command_to_run(self.koboldcpp_executable, args_for_kcpp_list)
         self.vram_at_decision_for_db, _, _, _ = koboldcpp_core.get_available_vram_mb()
         
-        # Now use the properly defined attributes
         self.kcpp_process_obj, error_msg = koboldcpp_core.launch_process(
             self.current_command_list_for_db, capture_output=True, new_console=False, use_text_mode=False
         )
@@ -717,7 +794,7 @@ class KoboldLauncherGUI(ctk.CTk):
             self.current_tuning_model_analysis,
             self.vram_at_decision_for_db, 
             self.current_command_list_for_db,
-            self.level_of_last_monitored_run,  # Use the stored level
+            self.level_of_last_monitored_run,
             final_db_outcome, 
             self.last_approx_vram_used_kcpp_mb
         )
@@ -726,10 +803,21 @@ class KoboldLauncherGUI(ctk.CTk):
         self._present_post_monitoring_choices(final_db_outcome)
 
     def _set_tuning_buttons_state(self, state="normal"):
-        buttons_to_manage = [self.btn_tune_launch_monitor, self.btn_tune_skip_launch_direct, self.btn_tune_more_gpu, self.btn_tune_more_cpu, self.btn_tune_edit_args, self.btn_tune_edit_model_perm_args, self.btn_tune_new_gguf, self.btn_tune_quit_tuning]
+        buttons_to_manage = [
+            getattr(self, 'btn_tune_launch_monitor', None), 
+            getattr(self, 'btn_tune_skip_launch_direct', None), 
+            getattr(self, 'btn_tune_more_gpu', None), 
+            getattr(self, 'btn_tune_more_cpu', None), 
+            getattr(self, 'btn_tune_edit_args', None), 
+            getattr(self, 'btn_tune_edit_model_perm_args', None), 
+            getattr(self, 'btn_tune_new_gguf', None), 
+            getattr(self, 'btn_tune_quit_tuning', None)
+        ]
         for btn in buttons_to_manage:
-            if btn and btn.winfo_exists(): btn.configure(state=state)
-        if state == "normal":
+            if btn and hasattr(btn, 'winfo_exists') and btn.winfo_exists(): 
+                btn.configure(state=state)
+        
+        if state == "normal": # Re-apply conditional disabled states
             if hasattr(self, 'btn_tune_more_gpu') and self.btn_tune_more_gpu.winfo_exists():
                 self.btn_tune_more_gpu.configure(state="normal" if self.current_tuning_attempt_level > self.current_tuning_min_level else "disabled")
             if hasattr(self, 'btn_tune_more_cpu') and self.btn_tune_more_cpu.winfo_exists():
@@ -741,26 +829,36 @@ class KoboldLauncherGUI(ctk.CTk):
         if self.kcpp_process_obj and self.kcpp_process_obj.poll() is None:
             self.log_to_console("Auto-killing monitored KCPP instance after assessment before showing choices.")
             koboldcpp_core.kill_process(self.kcpp_process_obj.pid, force=True); self.kcpp_process_obj = None
-        frames_to_hide = [self.tuning_actions_primary_frame, self.tuning_actions_secondary_frame, self.tuning_model_config_frame, self.tuning_actions_navigation_frame]
-        for frame_attr_name in frames_to_hide: # Iterate over attributes directly
-            frame = getattr(self, frame_attr_name.winfo_name(), None) if isinstance(frame_attr_name, ctk.CTkFrame) else getattr(self, frame_attr_name, None)
-            if frame and frame.winfo_exists(): frame.grid_remove()
+        
+        frames_to_hide_names = ['tuning_actions_primary_frame', 'tuning_actions_secondary_frame', 
+                                'tuning_model_config_frame', 'tuning_actions_navigation_frame']
+        for frame_name in frames_to_hide_names:
+            frame = getattr(self, frame_name, None)
+            if frame and hasattr(frame, 'winfo_exists') and frame.winfo_exists():
+                frame.grid_remove()
+
         if not hasattr(self, 'post_monitor_choices_frame'):
             self.post_monitor_choices_frame = ctk.CTkFrame(self.tuning_mode_frame)
-            self.post_monitor_choices_frame.grid(row=3, column=0, rowspan=4, padx=10, pady=5, sticky="news")
+            # Ensure it's placed correctly within tuning_mode_frame's grid
+            self.post_monitor_choices_frame.grid(row=3, column=0, rowspan=4, padx=10, pady=5, sticky="news") 
             self.post_monitor_choices_frame.grid_columnconfigure(0, weight=1)
-        self.post_monitor_choices_frame.grid()
-        for widget in self.post_monitor_choices_frame.winfo_children(): widget.destroy()
+        
+        self.post_monitor_choices_frame.grid() # Make sure it's visible
+
+        for widget in self.post_monitor_choices_frame.winfo_children(): widget.destroy() # Clear previous choices
+
         ctk.CTkLabel(self.post_monitor_choices_frame, text=f"Outcome: {outcome}", font=ctk.CTkFont(weight="bold")).pack(pady=(10, 2), anchor="w", padx=5)
         if self.last_free_vram_after_load_mb is not None:
             ctk.CTkLabel(self.post_monitor_choices_frame, text=f"VRAM After Load: {self.last_free_vram_after_load_mb:.0f} MB free").pack(pady=1, anchor="w", padx=5)
         if self.last_approx_vram_used_kcpp_mb is not None:
             ctk.CTkLabel(self.post_monitor_choices_frame, text=f"Approx. KCPP VRAM Used: {self.last_approx_vram_used_kcpp_mb:.0f} MB").pack(pady=1, anchor="w", padx=5)
+        
         vram_status_text = "VRAM Status: Check KCPP Log"
         if "SUCCESS_LOAD_VRAM_OK" in outcome: vram_status_text = "VRAM Usage: OK"
         elif "SUCCESS_LOAD_VRAM_TIGHT" in outcome: vram_status_text = "VRAM Usage: TIGHT"
         elif "SUCCESS_LOAD_NO_VRAM_CHECK" in outcome: vram_status_text = "VRAM Usage: Not Checked"
         ctk.CTkLabel(self.post_monitor_choices_frame, text=vram_status_text).pack(pady=(1, 5), anchor="w", padx=5)
+
         if "SUCCESS_LOAD_VRAM_OK" in outcome:
             ctk.CTkButton(self.post_monitor_choices_frame, text="✅ Accept & Launch for Use", command=lambda: self._handle_post_monitor_action("launch_for_use", outcome)).pack(fill="x", pady=3, padx=5)
             ctk.CTkButton(self.post_monitor_choices_frame, text="💾 Save as Good & Continue Tuning (Try More GPU)", command=lambda: self._handle_post_monitor_action("save_good_more_gpu", outcome)).pack(fill="x", pady=3, padx=5)
@@ -774,71 +872,73 @@ class KoboldLauncherGUI(ctk.CTk):
         elif "TIMEOUT" in outcome:
             ctk.CTkLabel(self.post_monitor_choices_frame, text="Launch timed out. Manual check or try different settings.").pack(pady=3, anchor="w", padx=5)
             ctk.CTkButton(self.post_monitor_choices_frame, text="⚙️ Try More CPU (Assume OOM)", command=lambda: self._handle_post_monitor_action("more_cpu_after_fail", outcome)).pack(fill="x", pady=3, padx=5)
+        
         ctk.CTkButton(self.post_monitor_choices_frame, text="↩️ Save & Return to Tuning Menu", command=lambda: self._handle_post_monitor_action("return_to_tuning_menu", outcome)).pack(fill="x", pady=3, padx=5)
         self.log_to_console("Presented post-monitoring choices to user.")
 
     def _return_to_full_tuning_menu(self):
         if hasattr(self, 'post_monitor_choices_frame') and self.post_monitor_choices_frame.winfo_exists():
             self.post_monitor_choices_frame.grid_remove()
-        frames_to_show = [self.tuning_actions_primary_frame, self.tuning_actions_secondary_frame, self.tuning_model_config_frame, self.tuning_actions_navigation_frame]
-        for frame_attr_name in frames_to_show:
-            frame = getattr(self, frame_attr_name.winfo_name(), None) if isinstance(frame_attr_name, ctk.CTkFrame) else getattr(self, frame_attr_name, None)
-            if frame and frame.winfo_exists(): frame.grid()
+        
+        frames_to_show_names = ['tuning_actions_primary_frame', 'tuning_actions_secondary_frame', 
+                                'tuning_model_config_frame', 'tuning_actions_navigation_frame']
+        for frame_name in frames_to_show_names:
+            frame = getattr(self, frame_name, None)
+            if frame and hasattr(frame, 'winfo_exists') and frame.winfo_exists():
+                frame.grid() # Re-grid them to make them visible
+        
         self._set_tuning_buttons_state("normal"); self.update_tuning_display()
 
     def _handle_post_monitor_action(self, action_key, original_db_outcome):
         self.log_to_console(f"User post-monitoring action: {action_key}")
 
-        # The command that was *just* monitored is self.current_command_list_for_db
-        # The OT level for that command is self.level_of_last_monitored_run
-
-        # If we launch for use, we use the current_tuning_attempt_level (which might have been adjusted by user)
-        # and the current_tuning_session_base_args.
         ot_string_for_next_launch = koboldcpp_core.generate_overridetensors(self.current_tuning_model_analysis, self.current_tuning_attempt_level)
         args_for_next_launch = koboldcpp_core.build_command(self.current_tuning_model_path, ot_string_for_next_launch, self.current_tuning_model_analysis, self.current_tuning_session_base_args)
         command_to_run_for_use = koboldcpp_core.get_command_to_run(self.koboldcpp_executable, args_for_next_launch)
 
-        new_db_outcome = original_db_outcome
+        new_db_outcome_suffix = "" # Suffix to append to original_db_outcome
 
         if action_key == "launch_for_use":
-            new_db_outcome = "SUCCESS_USER_LAUNCHED_GUI"
-            self._launch_final_koboldcpp(command_to_run_for_use, new_db_outcome, self.level_of_last_monitored_run) # Save DB with the level of the *monitored* run
+            new_db_outcome_suffix = "_USER_LAUNCHED"
+            self._launch_final_koboldcpp(command_to_run_for_use, original_db_outcome + new_db_outcome_suffix, self.level_of_last_monitored_run)
             self.end_tuning_session()
             return
         if action_key == "launch_for_use_risky":
-            new_db_outcome = "SUCCESS_USER_LAUNCHED_RISKY_GUI"
-            self._launch_final_koboldcpp(command_to_run_for_use, new_db_outcome, self.level_of_last_monitored_run)
+            new_db_outcome_suffix = "_USER_LAUNCHED_RISKY"
+            self._launch_final_koboldcpp(command_to_run_for_use, original_db_outcome + new_db_outcome_suffix, self.level_of_last_monitored_run)
             self.end_tuning_session()
             return
 
-        # Actions that continue tuning will adjust self.current_tuning_attempt_level for the *next* display/launch
         if action_key == "save_good_more_gpu":
-            new_db_outcome = "SUCCESS_USER_SAVED_GOOD_MORE_GPU_GUI"
+            new_db_outcome_suffix = "_USER_SAVED_GOOD_MORE_GPU"
             if self.current_tuning_attempt_level > self.current_tuning_min_level:
                 self.current_tuning_attempt_level -= 1
             else: self.log_to_console("Already at Max GPU, cannot go further.")
         elif action_key == "more_gpu_now":
+            new_db_outcome_suffix = "_USER_WANTS_MORE_GPU_NOW"
             if self.current_tuning_attempt_level > self.current_tuning_min_level:
                 self.current_tuning_attempt_level -= 1
             else: self.log_to_console("Already at Max GPU, cannot go further.")
         elif action_key in ["more_cpu_now", "auto_adjust_cpu", "more_cpu_after_fail"]:
-            if action_key == "auto_adjust_cpu": new_db_outcome = "USER_ACCEPTED_AUTO_ADJUST_CPU_GUI"
-            elif action_key == "more_cpu_after_fail": new_db_outcome = "USER_TRIED_MORE_CPU_AFTER_FAIL_GUI"
+            if action_key == "auto_adjust_cpu": new_db_outcome_suffix = "_USER_ACCEPTED_AUTO_ADJUST_CPU"
+            elif action_key == "more_cpu_after_fail": new_db_outcome_suffix = "_USER_TRIED_MORE_CPU_AFTER_FAIL"
+            else: new_db_outcome_suffix = "_USER_WANTS_MORE_CPU_NOW"
             if self.current_tuning_attempt_level < self.current_tuning_max_level:
                 self.current_tuning_attempt_level += 1
             else: self.log_to_console("Already at Max CPU, cannot go further.")
         elif action_key == "return_to_tuning_menu":
-            new_db_outcome = "USER_RETURNED_TO_TUNING_MENU_GUI"
+            new_db_outcome_suffix = "_USER_RETURNED_TO_TUNING_MENU"
 
+        final_db_outcome_to_save = original_db_outcome + new_db_outcome_suffix
         vram_decision_val = self.vram_at_decision_for_db if hasattr(self, 'vram_at_decision_for_db') else 0
         koboldcpp_core.save_config_to_db(
             self.db_path, self.current_tuning_model_path, self.current_tuning_model_analysis,
             vram_decision_val, self.current_command_list_for_db, 
-            self.level_of_last_monitored_run,  # Use this stored level instead of self.current_tuning_attempt_level
-            new_db_outcome, self.last_approx_vram_used_kcpp_mb
+            self.level_of_last_monitored_run, 
+            final_db_outcome_to_save, self.last_approx_vram_used_kcpp_mb
         )
         self.load_history()
-        self._return_to_full_tuning_menu() # This will call update_tuning_display with the new self.current_tuning_attempt_level
+        self._return_to_full_tuning_menu()
 
     def _launch_final_koboldcpp(self, command_list, db_outcome_for_update, attempt_level_for_db_record):
         self.log_to_console(f"Launching KoboldCpp for use with command: {' '.join(command_list)}")
@@ -858,26 +958,18 @@ class KoboldLauncherGUI(ctk.CTk):
             self.log_to_console(f"KoboldCPP launched for use in new console (PID: {process.pid}).")
             self.last_process = process; self.process_running = True
             
-            # Check the setting before opening webbrowser  <--- MODIFIED PART
-            if self.config.get("auto_open_webui", True): # Default to True if setting missing
+            if self.config.get("auto_open_webui", True):
                 args_dict_for_port = koboldcpp_core.args_list_to_dict(command_list)
-                port_to_open = args_dict_for_port.get("--port", "5000") # Default port
-                # Fallback to global config port if not in command_list (e.g. if --port removed from defaults)
-                if "--port" not in args_dict_for_port:
-                    port_to_open = self.config.get("default_args", {}).get("--port", "5000")
-
+                port_to_open = args_dict_for_port.get("--port", self.config.get("default_args", {}).get("--port", "5000"))
                 try:
                     port_num = int(port_to_open)
                     if 1 <= port_num <= 65535:
                         import webbrowser
                         self.log_to_console(f"Auto-opening web UI at http://localhost:{port_num} based on setting.")
                         threading.Timer(3.0, lambda: webbrowser.open(f"http://localhost:{port_num}")).start()
-                    else:
-                        self.log_to_console(f"Invalid port number '{port_to_open}' for auto-opening browser.")
-                except ValueError:
-                    self.log_to_console(f"Invalid port value '{port_to_open}' for auto-opening browser.")
-            else:
-                self.log_to_console("Auto-open web UI is disabled in settings.")
+                    else: self.log_to_console(f"Invalid port number '{port_to_open}' for auto-opening browser.")
+                except ValueError: self.log_to_console(f"Invalid port value '{port_to_open}' for auto-opening browser.")
+            else: self.log_to_console("Auto-open web UI is disabled in settings.")
 
     def skip_tune_and_launch_direct(self):
         if not self.tuning_in_progress: return
@@ -887,22 +979,19 @@ class KoboldLauncherGUI(ctk.CTk):
         ot_string = koboldcpp_core.generate_overridetensors(self.current_tuning_model_analysis, self.current_tuning_attempt_level)
         args_list = koboldcpp_core.build_command(self.current_tuning_model_path, ot_string, self.current_tuning_model_analysis, self.current_tuning_session_base_args)
         command_to_run = koboldcpp_core.get_command_to_run(self.koboldcpp_executable, args_list)
-        # For DB, this direct launch uses the current_tuning_attempt_level
         self._launch_final_koboldcpp(command_to_run, "SUCCESS_USER_DIRECT_LAUNCH_GUI", self.current_tuning_attempt_level)
         self.end_tuning_session()
 
-    def setup_settings_tab(self): # Populates self.settings_widgets
+    def setup_settings_tab(self):
         settings_frame = ctk.CTkScrollableFrame(self.tab_settings)
         settings_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-        # --- UI Theme ---
         theme_frame = ctk.CTkFrame(settings_frame)
         theme_frame.pack(fill="x", expand=True, padx=10, pady=10)
         ctk.CTkLabel(theme_frame, text="UI Theme:", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=10, pady=10, sticky="w")
         theme_var = ctk.StringVar(value=ctk.get_appearance_mode().lower())
         ctk.CTkOptionMenu(theme_frame, values=["dark", "light", "system"], variable=theme_var, command=self.change_theme).grid(row=0, column=1, padx=10, pady=10)
 
-        # --- KoboldCPP Executable ---
         exe_frame = ctk.CTkFrame(settings_frame)
         exe_frame.pack(fill="x", expand=True, padx=10, pady=10)
         exe_frame.grid_columnconfigure(1, weight=1)
@@ -911,53 +1000,65 @@ class KoboldLauncherGUI(ctk.CTk):
         self.exe_path_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         ctk.CTkButton(exe_frame, text="Browse", command=self.browse_executable).grid(row=0, column=2, padx=10, pady=10)
 
-        # --- Auto-Open Web UI Toggle ---  <--- NEW SECTION
         webui_frame = ctk.CTkFrame(settings_frame)
-        webui_frame.pack(fill="x", expand=True, padx=10, pady=5) # pady less than exe_frame
+        webui_frame.pack(fill="x", expand=True, padx=10, pady=5)
         ctk.CTkLabel(webui_frame, text="Launcher Behavior:", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        
         self.auto_open_webui_var = ctk.BooleanVar(value=self.config.get("auto_open_webui", True))
         self.auto_open_webui_checkbox = ctk.CTkCheckBox(webui_frame, text="Auto-Open Web UI After Launch", variable=self.auto_open_webui_var)
         self.auto_open_webui_checkbox.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="w")
-        # --- End New Section ---
 
         ctk.CTkLabel(settings_frame, text="Global KoboldCpp Default Arguments", font=ctk.CTkFont(size=16, weight="bold")).pack(fill="x", expand=True, padx=10, pady=(20, 10))
-        self.settings_widgets = {}
+        self.settings_widgets = {} # Stores {"--param_name": {"widget": widget_obj, "type": "bool/str_num"}}
+        
         param_definitions = [
-            # ... (rest of your param_definitions remains the same)
             {"name": "Threads", "param": "--threads", "help": "CPU threads ('auto' or number)."},
+            {"name": "BLAS Threads (nblas)", "param": "--nblas", "help": "BLAS threads ('auto' or number)."},
             {"name": "Context Size", "param": "--contextsize", "help": "Max context tokens (e.g., 4096, 16384)."},
             {"name": "Prompt Limit", "param": "--promptlimit", "help": "Max prompt tokens (<= contextsize)."},
-            {"name": "Use CUBLAS", "param": "--usecublas", "help": "Enable/Disable CUDA BLAS (NVIDIA).", "type": "bool"},
-            {"name": "Flash Attention", "param": "--flashattention", "help": "Enable/Disable FlashAttention.", "type": "bool"},
+            {"name": "GPU Layers", "param": "--gpulayers", "help": "Layers on GPU. 'off', 0 for CPU. 999 for max."},
+            {"name": "Use CUBLAS", "param": "--usecublas", "help": "Enable CUDA BLAS (NVIDIA).", "type": "bool"},
+            {"name": "Flash Attention", "param": "--flashattention", "help": "Enable FlashAttention.", "type": "bool"},
+            {"name": "No Memory Map", "param": "--nommap", "help": "Disable memory mapping.", "type": "bool"},
+            {"name": "Low VRAM Mode", "param": "--lowvram", "help": "Enable low VRAM mode.", "type": "bool"},
+            {"name": "QuantKV", "param": "--quantkv", "help": "K/V cache quant ('auto', 'off', or number)."},
+            {"name": "BLAS Batch Size", "param": "--blasbatchsize", "help": "BLAS batch size ('auto', 'off', or number)."},
             {"name": "Port", "param": "--port", "help": "Web UI port (default 5000)."},
-            {"name": "Default Gen Amount", "param": "--defaultgenamt", "help": "Default tokens to generate."},
-            {"name": "QuantKV", "param": "--quantkv", "help": "K/V cache quant (0=f32, 1=Q8_0, etc.). 'off' or number or 'auto'."},
-            {"name": "BLAS Batch Size", "param": "--blasbatchsize", "help": "BLAS batch size (e.g., 128, 256, 512). 'auto' or number."},
-            {"name": "GPU Layers", "param": "--gpulayers", "help": "Layers on GPU. 'off', 0 for CPU. 999 for max."}
+            {"name": "Default Gen Amount", "param": "--defaultgenamt", "help": "Default tokens to generate."}
         ]
-        # ... (rest of the settings_widgets loop remains the same)
+
         for setting_def in param_definitions:
             param_name = setting_def["param"]
-            core_default_value_for_type_check = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].get(param_name)
+            core_default_value = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].get(param_name)
+            
             frame = ctk.CTkFrame(settings_frame); frame.pack(fill="x", expand=True, padx=10, pady=5)
-            frame.grid_columnconfigure(1, weight=0); frame.grid_columnconfigure(2, weight=1)
+            frame.grid_columnconfigure(1, weight=0); frame.grid_columnconfigure(2, weight=1) # Label, Widget, HelpText
+            
             ctk.CTkLabel(frame, text=f"{setting_def['name']}:", width=160, anchor="w").grid(row=0, column=0, padx=10, pady=(5,0), sticky="w")
+            
             widget_instance = None
-            is_boolean_param = setting_def.get("type") == "bool" or isinstance(core_default_value_for_type_check, bool)
+            widget_type_str = "str_num" # Default for Entry
+
+            is_boolean_param = setting_def.get("type") == "bool" or isinstance(core_default_value, bool)
+            
             if is_boolean_param:
-                initial_bool_val = False
-                if isinstance(core_default_value_for_type_check, bool): initial_bool_val = core_default_value_for_type_check
-                elif isinstance(core_default_value_for_type_check, str): initial_bool_val = core_default_value_for_type_check.lower() == 'true'
+                widget_type_str = "bool"
+                initial_bool_val = False # Determine initial value for checkbox
+                if isinstance(core_default_value, bool): initial_bool_val = core_default_value
+                elif isinstance(core_default_value, str): initial_bool_val = core_default_value.lower() == 'true'
+                
                 var = ctk.BooleanVar(value=initial_bool_val)
                 widget_instance = ctk.CTkCheckBox(frame, text="", variable=var)
-                widget_instance.grid(row=0, column=1, padx=10, pady=(5,0), sticky="w"); widget_instance.variable = var
-            else:
-                widget_instance = ctk.CTkEntry(frame, width=120)
-                if core_default_value_for_type_check is not None: widget_instance.insert(0, str(core_default_value_for_type_check))
                 widget_instance.grid(row=0, column=1, padx=10, pady=(5,0), sticky="w")
+                widget_instance.variable = var # Store var for easy access
+            else: # Entry for string/number/auto
+                widget_instance = ctk.CTkEntry(frame, width=120) # Fixed width for entry
+                if core_default_value is not None:
+                    widget_instance.insert(0, str(core_default_value))
+                widget_instance.grid(row=0, column=1, padx=10, pady=(5,0), sticky="w")
+            
             ctk.CTkLabel(frame, text=setting_def['help'], font=ctk.CTkFont(size=11), text_color="gray", anchor="w", justify="left", wraplength=350).grid(row=0, column=2, padx=10, pady=(5,0), sticky="w")
-            self.settings_widgets[param_name] = widget_instance
+            self.settings_widgets[param_name] = {"widget": widget_instance, "type": widget_type_str}
+
 
         ctk.CTkButton(settings_frame, text="Save Settings", command=self.save_settings_action).pack(pady=20)
         ctk.CTkButton(settings_frame, text="Reset All Settings to Defaults", command=self.reset_config_action, fg_color="#dc3545", hover_color="#c82333").pack(pady=10)
@@ -990,19 +1091,20 @@ class KoboldLauncherGUI(ctk.CTk):
                     self.log_to_console(f"Backed up current config to {config_path}.backup_{time.strftime('%Y%m%d_%H%M%S')}")
                 
                 self.config = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.copy()
-                # Ensure all keys from default template are present, especially new ones
+                # Crucially, ensure default_args is a deep copy for reset
+                self.config["default_args"] = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+
                 if "model_specific_args" not in self.config: self.config["model_specific_args"] = {}
-                if "auto_open_webui" not in self.config: # Ensure new setting is reset
+                if "auto_open_webui" not in self.config:
                     self.config["auto_open_webui"] = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.get("auto_open_webui", True)
 
                 success, message = koboldcpp_core.save_launcher_config(self.config)
-                # ... (rest of the method remains the same)
                 if success:
                     self.db_path = self.config.get("db_file", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
                     self.default_model_dir = self.config.get("default_gguf_dir", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.get("default_gguf_dir",""))
                     if not self.default_model_dir or not os.path.isdir(self.default_model_dir): self.default_model_dir = os.getcwd()
                     self.koboldcpp_executable = self.config.get("koboldcpp_executable", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["koboldcpp_executable"])
-                    self.load_settings_from_config() # This will now also load the auto_open_webui_var
+                    self.load_settings_from_config()
                     self.log_to_console("Configuration reset to defaults and saved."); messagebox.showinfo("Configuration Reset", "Configuration has been reset to defaults.")
                 else: self.log_to_console(f"Error saving reset config: {message}"); messagebox.showerror("Error", f"Error saving reset configuration: {message}")
             except Exception as e: self.log_to_console(f"Error during configuration reset: {e}"); messagebox.showerror("Error", f"An error occurred during configuration reset: {e}")
@@ -1014,24 +1116,33 @@ class KoboldLauncherGUI(ctk.CTk):
             if current_exe_from_gui: self.koboldcpp_executable = current_exe_from_gui
         self.check_koboldcpp_executable()
         if not os.path.exists(self.koboldcpp_executable): messagebox.showerror("Executable Not Found", f"Could not find KoboldCPP: {self.koboldcpp_executable}"); return
+        
         self.log_to_console(f"Direct launching KoboldCPP with effective defaults for: {os.path.basename(self.current_model_path)}")
         effective_base_args = self._get_merged_args_for_model(self.current_model_path)
-        active_args_for_launch = {}
+        
+        active_args_for_launch = {} # Filter for active args (True bools, non-empty/non-"auto" strings where appropriate)
         for k, v_raw in effective_base_args.items():
             v = v_raw
-            if isinstance(v_raw, str):
+            if isinstance(v_raw, str): # Convert "true"/"false" strings to bools for consistent handling
                 if v_raw.lower() == 'true': v = True
                 elif v_raw.lower() == 'false': v = False
+            
             if isinstance(v, bool):
-                if v: active_args_for_launch[k] = True
-            elif isinstance(v, str) and v.strip(): active_args_for_launch[k] = v.strip()
-            elif not isinstance(v, str) and v is not None: active_args_for_launch[k] = v
+                if v: active_args_for_launch[k] = True # Add if True
+            elif isinstance(v, str) and v.strip(): # Non-empty strings
+                # For specific args like 'nblas', 'auto' means omit, so don't add 'auto' here for build_command's logic
+                if k == "--nblas" and v.lower() == "auto":
+                    pass # build_command will omit if --nblas is not in the dict or is "auto"
+                else:
+                    active_args_for_launch[k] = v.strip()
+            elif not isinstance(v, str) and v is not None: # Numbers etc.
+                active_args_for_launch[k] = v
+
         args_list = koboldcpp_core.build_command(self.current_model_path, None, self.model_analysis_info or {}, active_args_for_launch)
         full_cmd_list = koboldcpp_core.get_command_to_run(self.koboldcpp_executable, args_list)
         self.vram_at_decision_for_db = koboldcpp_core.get_available_vram_mb()[0]
         self.last_approx_vram_used_kcpp_mb = None
-        # For direct launch, the concept of "attempt_level" is less defined. Use 0 or a special marker.
-        self._launch_final_koboldcpp(full_cmd_list, "SUCCESS_USER_DIRECT_SETTINGS_GUI", 0) # attempt_level 0 for direct
+        self._launch_final_koboldcpp(full_cmd_list, "SUCCESS_USER_DIRECT_SETTINGS_GUI", 0)
 
     def launch_best_remembered(self):
         if not self.current_model_path: messagebox.showwarning("No Model Selected", "Please select a GGUF model first."); return
@@ -1041,17 +1152,22 @@ class KoboldLauncherGUI(ctk.CTk):
             if current_exe_from_gui: self.koboldcpp_executable = current_exe_from_gui
         self.check_koboldcpp_executable()
         if not os.path.exists(self.koboldcpp_executable): messagebox.showerror("Executable Not Found", f"KoboldCPP not found: {self.koboldcpp_executable}"); return
+        
         self.log_to_console("Attempting to launch with best remembered config...")
         current_vram, _, _, _ = koboldcpp_core.get_available_vram_mb()
         best_config_from_db = koboldcpp_core.find_best_historical_config(self.db_path, self.model_analysis_info, current_vram)
+        
         if best_config_from_db and best_config_from_db.get("args_list"):
             self.log_to_console(f"Found best remembered config (Lvl: {best_config_from_db['attempt_level']}, Outcome: {best_config_from_db['outcome']})")
             historical_args_dict = koboldcpp_core.args_list_to_dict(best_config_from_db["args_list"])
-            if "--model" in historical_args_dict: del historical_args_dict["--model"]
-            historical_ot_string = historical_args_dict.pop("--overridetensors", None)
-            base_for_remembered_launch = self._get_merged_args_for_model(self.current_model_path)
-            final_args_for_launch = base_for_remembered_launch.copy(); final_args_for_launch.update(historical_args_dict)
-            active_final_args = {}
+            if "--model" in historical_args_dict: del historical_args_dict["--model"] # Remove model from historical
+            historical_ot_string = historical_args_dict.pop("--overridetensors", None) # Extract OT string
+            
+            base_for_remembered_launch = self._get_merged_args_for_model(self.current_model_path) # Get current model/global defaults
+            final_args_for_launch = base_for_remembered_launch.copy()
+            final_args_for_launch.update(historical_args_dict) # Override with remembered non-OT args
+            
+            active_final_args = {} # Filter for active args again
             for k, v_raw in final_args_for_launch.items():
                 v = v_raw
                 if isinstance(v_raw, str):
@@ -1059,10 +1175,14 @@ class KoboldLauncherGUI(ctk.CTk):
                     elif v_raw.lower() == 'false': v = False
                 if isinstance(v, bool):
                     if v: active_final_args[k] = True
-                elif isinstance(v, str) and v.strip(): active_final_args[k] = v.strip()
+                elif isinstance(v, str) and v.strip():
+                    if k == "--nblas" and v.lower() == "auto": pass 
+                    else: active_final_args[k] = v.strip()
                 elif not isinstance(v, str) and v is not None: active_final_args[k] = v
+                
             final_args_list = koboldcpp_core.build_command(self.current_model_path, historical_ot_string, self.model_analysis_info, active_final_args)
             full_cmd_list = koboldcpp_core.get_command_to_run(self.koboldcpp_executable, final_args_list)
+            
             self.vram_at_decision_for_db = current_vram
             self.last_approx_vram_used_kcpp_mb = best_config_from_db.get("approx_vram_used_kcpp_mb")
             attempt_level_for_this_launch = best_config_from_db.get("attempt_level",0)
@@ -1079,39 +1199,24 @@ class KoboldLauncherGUI(ctk.CTk):
         if self.last_process and self.last_process.poll() is None:
             self.log_to_console(f"Stopping last direct launch KCPP process (PID: {self.last_process.pid})..."); koboldcpp_core.kill_process(self.last_process.pid, force=True); self.last_process = None
         self.process_running = False
-        if self.tuning_in_progress: self.end_tuning_session(switch_to_model_selection=False)
+        if self.tuning_in_progress: self.end_tuning_session(switch_to_model_selection=False) # Just end, don't switch view
+        
         kobold_exe_basename = os.path.basename(self.koboldcpp_executable if self.koboldcpp_executable else "koboldcpp.exe")
-        killed_by_sweep = False
-        if sys.platform == "win32":
-            common_kcpp_names = ["koboldcpp.exe", "koboldcpp_cu12.exe", "koboldcpp_nocuda.exe", kobold_exe_basename]
-            if kobold_exe_basename.lower().endswith(".py"): common_kcpp_names.append("python.exe")
-            for name in set(common_kcpp_names):
-                try:
-                    self.log_to_console(f"Attempting taskkill /F /IM {name} /T"); startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    process = subprocess.Popen(["taskkill", "/F", "/IM", name, "/T"], startupinfo=startupinfo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
-                    stdout, stderr = process.communicate(timeout=5); stderr_str = stderr.decode(errors='ignore').lower()
-                    if process.returncode == 0 or "could not find the process" in stderr_str or "no running instance" in stderr_str:
-                        self.log_to_console(f"Taskkill for {name} reported success or process not found."); killed_by_sweep = True
-                    elif stdout.strip(): self.log_to_console(f"Taskkill stdout for {name}: {stdout.decode(errors='ignore').strip()}")
-                    elif stderr_str.strip(): self.log_to_console(f"Taskkill stderr for {name}: {stderr_str.strip()}")
-                except subprocess.TimeoutExpired: self.log_to_console(f"Taskkill for {name} timed out.")
-                except Exception as e: self.log_to_console(f"Error during taskkill for {name}: {e}")
-        else:
-            try:
-                self.log_to_console(f"Attempting pkill -9 -f {kobold_exe_basename}"); subprocess.run(["pkill", "-9", "-f", kobold_exe_basename], check=False, timeout=5)
-                if kobold_exe_basename.lower().endswith(".py"):
-                    self.log_to_console(f"Attempting pkill -9 -f python.*{kobold_exe_basename.replace('.py','')} "); subprocess.run(["pkill", "-9", "-f", f"python.*{kobold_exe_basename.replace('.py','')}"], check=False, timeout=5)
-                killed_by_sweep = True
-            except subprocess.TimeoutExpired: self.log_to_console("Pkill command timed out.")
-            except Exception as e: self.log_to_console(f"Error during pkill: {e}")
+        killed_by_sweep, msg_sweep = koboldcpp_core.kill_processes_by_name(kobold_exe_basename)
+        self.log_to_console(f"Sweep for '{kobold_exe_basename}': {msg_sweep}")
+        if kobold_exe_basename.lower().endswith(".py"):
+            killed_py_sweep, msg_py_sweep = koboldcpp_core.kill_processes_by_name("python", cmdline_substr_filter=kobold_exe_basename)
+            self.log_to_console(f"Sweep for 'python' with cmdline '{kobold_exe_basename}': {msg_py_sweep}")
+            killed_by_sweep = killed_by_sweep or killed_py_sweep
+
         if killed_by_sweep: self.log_to_console("Forceful sweep completed. Check system if issues persist.")
-        else: self.log_to_console("Forceful sweep attempted. No processes explicitly reported killed by name patterns.")
+        else: self.log_to_console("Forceful sweep attempted. No processes explicitly reported killed by patterns related to current KCPP executable.")
+
 
     def change_theme(self, new_theme):
-        """Change the UI theme and save the setting"""
         ctk.set_appearance_mode(new_theme)
         self.config["color_mode"] = new_theme.lower()
-        self.save_config()  # Make sure the theme change is saved immediately
+        self.save_config()
         self.log_to_console(f"Theme changed to {new_theme}.")
 
     def log_to_console(self, text):
@@ -1127,8 +1232,7 @@ class KoboldLauncherGUI(ctk.CTk):
                 free_mb, total_mb, message, gpu_info_dict = koboldcpp_core.get_available_vram_mb()
                 used_mb = total_mb - free_mb if total_mb > 0 else 0
                 self.after(0, lambda u=used_mb, t=total_mb, msg=message: self.update_vram_display(u, t, msg))
-            except Exception:
-                pass
+            except Exception: pass
             time.sleep(5)
 
     def update_vram_display(self, used_mb, total_mb, message_from_core=""):
@@ -1136,9 +1240,9 @@ class KoboldLauncherGUI(ctk.CTk):
             if total_mb > 0:
                 percentage = used_mb / total_mb; self.vram_progress.set(percentage)
                 self.vram_text.configure(text=f"{used_mb:.0f}MB / {total_mb:.0f}MB ({percentage*100:.1f}%)")
-                progress_color = "#28a745"
-                if percentage > 0.9: progress_color = "#dc3545"
-                elif percentage > 0.7: progress_color = "#ffc107"
+                progress_color = "#28a745" # Green
+                if percentage > 0.9: progress_color = "#dc3545" # Red
+                elif percentage > 0.7: progress_color = "#ffc107" # Yellow
                 self.vram_progress.configure(progress_color=progress_color)
             else: self.vram_progress.set(0); self.vram_text.configure(text=f"VRAM: {message_from_core or 'Info unavailable'}")
 
