@@ -24,24 +24,22 @@ class KoboldLauncherGUI(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # This now returns a more comprehensive gpu_info and potentially modified config
         core_init_results = koboldcpp_core.initialize_launcher()
         self.config = core_init_results["config"]
         self.system_info = core_init_results["system_info"]
-        self.gpu_info = core_init_results["gpu_info"] # Will contain info from various GPU types
+        self.gpu_info = core_init_results["gpu_info"]
 
-        # Ensure critical config structures exist
         if "model_specific_args" not in self.config:
             self.config["model_specific_args"] = {}
-        # The core's load_config and DEFAULT_CONFIG_TEMPLATE ensure default_args is well-formed
-        # and includes all keys from the template.
 
         self.current_model_path = None
         self.process_running = False
         self.model_analysis_info = {}
-        self.last_process = None # For directly launched KCPP
+        self.last_process = None 
 
-        self.db_path = self.config.get("db_file", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
+        # self.config["db_file"] is now guaranteed to be an absolute path by koboldcpp_core.load_config()
+        self.db_path = self.config["db_file"] 
+        
         self.default_model_dir = self.config.get("default_gguf_dir", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.get("default_gguf_dir", ""))
         if not self.default_model_dir or not os.path.isdir(self.default_model_dir):
             self.default_model_dir = os.getcwd()
@@ -55,13 +53,12 @@ class KoboldLauncherGUI(ctk.CTk):
         self.current_tuning_session_base_args = {}
         self.current_tuning_model_analysis = {}
         self.current_tuning_model_path = None
-        self.level_of_last_monitored_run = 0 # Level of the KCPP run being monitored
-        self.current_command_list_for_db = [] # Command used for the KCPP run being monitored
-        self.vram_at_decision_for_db = None   # VRAM before launching the KCPP run being monitored
+        self.level_of_last_monitored_run = 0 
+        self.current_command_list_for_db = [] 
+        self.vram_at_decision_for_db = None   
 
-        # For monitoring KCPP output during tuning
         self.kcpp_monitor_thread = None
-        self.kcpp_process_obj = None # The Popen object for monitored KCPP
+        self.kcpp_process_obj = None 
         self.kcpp_success_event = threading.Event()
         self.kcpp_oom_event = threading.Event()
         self.kcpp_output_lines_shared = []
@@ -69,7 +66,7 @@ class KoboldLauncherGUI(ctk.CTk):
         self.last_free_vram_after_load_mb = None
 
         appearance_mode = self.config.get("color_mode", "dark").lower()
-        if appearance_mode not in ["dark", "light", "system"]: # Sanitize
+        if appearance_mode not in ["dark", "light", "system"]:
             appearance_mode = "dark"
         ctk.set_appearance_mode(appearance_mode)
         ctk.set_default_color_theme("blue")
@@ -85,20 +82,20 @@ class KoboldLauncherGUI(ctk.CTk):
 
         for tab in [self.tab_main, self.tab_settings, self.tab_history]:
             tab.grid_columnconfigure(0, weight=1)
-            # Ensure row 0 of each tab (where the main frame is placed) can expand
             tab.grid_rowconfigure(0, weight=1) 
 
-        self.setup_settings_tab() # Setup widgets
-        self.load_settings_from_config() # Populate widgets from loaded config
+        self.setup_settings_tab() 
+        self.load_settings_from_config() 
         self.setup_main_tab()
         self.setup_history_tab()
 
         threading.Thread(target=self.monitor_vram, daemon=True).start()
 
         self.log_to_console(f"KoboldCpp Smart Launcher GUI Initialized. Core config loaded: {core_init_results['config_message']}")
+        self.log_to_console(f"Using DB at: {self.db_path}") # Log the absolute DB path
         self.log_to_console(f"Initial GPU Info: {self.gpu_info.get('message', 'N/A')}")
-        self.check_koboldcpp_executable() # Check and potentially update self.koboldcpp_executable
-        self._show_model_selection_view() # Start with model selection view
+        self.check_koboldcpp_executable() 
+        self._show_model_selection_view()
 
     def _get_merged_args_for_model(self, model_path):
         """Gets args by merging: Core Defaults -> Global Config Defaults -> Model Specifics."""
@@ -204,38 +201,41 @@ class KoboldLauncherGUI(ctk.CTk):
         """Saves the current GUI state and self.config to the JSON file."""
         if hasattr(self, 'exe_path_entry') and self.exe_path_entry.winfo_exists():
             self.config["koboldcpp_executable"] = self.exe_path_entry.get().strip()
-        else: # Fallback if GUI element not ready
+        else: 
             self.config["koboldcpp_executable"] = self.koboldcpp_executable 
 
         self.config["default_gguf_dir"] = self.default_model_dir
-        self.config["db_file"] = self.db_path
+        
+        # self.db_path is already absolute. The core's save_launcher_config will handle
+        # converting it to a basename if it's in the default data directory.
+        self.config["db_file"] = self.db_path 
+        
         self.config["color_mode"] = ctk.get_appearance_mode().lower()
         
         if hasattr(self, 'auto_open_webui_var'):
             self.config["auto_open_webui"] = self.auto_open_webui_var.get()
-        # else: self.config["auto_open_webui"] remains as loaded
 
-        # Update global default args from Settings tab widgets
-        current_global_default_args = self.config.get("default_args", {}).copy() # Start with existing
+        current_global_default_args = self.config.get("default_args", {}).copy()
         for param_key, widget_info_dict in self.settings_widgets.items():
             widget = widget_info_dict["widget"]
             if isinstance(widget, ctk.CTkEntry):
                 current_global_default_args[param_key] = widget.get().strip()
-            elif hasattr(widget, "variable") and isinstance(widget.variable, ctk.BooleanVar): # CheckBox
-                current_global_default_args[param_key] = widget.variable.get() # Store as actual boolean
+            elif hasattr(widget, "variable") and isinstance(widget.variable, ctk.BooleanVar):
+                current_global_default_args[param_key] = widget.variable.get()
         self.config["default_args"] = current_global_default_args
 
-        # Ensure model_specific_args exists
         if "model_specific_args" not in self.config:
              self.config["model_specific_args"] = {}
 
         success, message = koboldcpp_core.save_launcher_config(self.config)
         if success:
             self.log_to_console(message)
-            # Re-assign internal state from potentially changed config values
             self.koboldcpp_executable = self.config["koboldcpp_executable"]
             self.default_model_dir = self.config.get("default_gguf_dir", "")
-            self.db_path = self.config.get("db_file", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
+            # self.db_path should remain consistent as it's absolute, 
+            # but core might have changed how it's stored in JSON (basename vs full).
+            # Re-read from config to be sure, although it should be the same absolute path.
+            self.db_path = self.config.get("db_file", self.db_path) # Ensure self.db_path is from loaded config.
         else:
             self.log_to_console(f"Error saving config: {message}")
             messagebox.showerror("Save Error", f"Could not save configuration: {message}")
@@ -1227,31 +1227,50 @@ class KoboldLauncherGUI(ctk.CTk):
     def reset_config_action(self):
         if messagebox.askyesno("Reset Configuration", "Reset all settings to defaults? This will overwrite your config file (a backup will be attempted)."):
             try:
-                config_path = koboldcpp_core.CONFIG_FILE
-                if os.path.exists(config_path):
-                    backup_path = config_path + ".backup_" + time.strftime("%Y%m%d_%H%M%S")
-                    shutil.copy2(config_path, backup_path)
+                # config_path comes from the core now via CONFIG_FILE constant
+                config_path_from_core = koboldcpp_core.CONFIG_FILE
+                if os.path.exists(config_path_from_core):
+                    backup_path = config_path_from_core + ".backup_" + time.strftime("%Y%m%d_%H%M%S")
+                    shutil.copy2(config_path_from_core, backup_path)
                     self.log_to_console(f"Backed up current config to {backup_path}")
                 
-                # Use a fresh copy from the core's template for reset
+                # Reset self.config to a fresh copy of the core's template
                 self.config = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.copy()
-                # Crucially, ensure default_args is also a deep copy from the template
+                # Ensure default_args is also a deep copy
                 self.config["default_args"] = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+                
+                # IMPORTANT: Ensure "db_file" is an absolute path before saving the reset config.
+                # The core's save_launcher_config expects an absolute path.
+                # DEFAULT_CONFIG_TEMPLATE["db_file"] is a basename.
+                default_db_basename = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"]
+                # We need access to _get_user_app_data_dir from the core if it's not exposed.
+                # For now, let's assume it's callable or we reconstruct the logic here.
+                # A cleaner way would be for the core to offer a function to get the default absolute DB path.
+                # If koboldcpp_core._get_user_app_data_dir is not directly accessible,
+                # we might need to temporarily hardcode the logic or make it accessible.
+                # For this example, I'll assume we can call a helper if it existed, or reproduce:
+                try:
+                    # Try to call the internal core function (not ideal, but for demonstration)
+                    user_app_data_dir = koboldcpp_core._get_user_app_data_dir()
+                except AttributeError: # Fallback if _get_user_app_data_dir isn't exposed
+                    self.log_to_console("Warning: Core's _get_user_app_data_dir not directly accessible. Using fallback for DB path reset.")
+                    if platform.system() == "Windows":
+                        user_app_data_dir = os.path.join(Path.home(), "AppData", "Local", koboldcpp_core.APP_NAME, "Data")
+                    elif platform.system() == "Darwin": # macOS
+                        user_app_data_dir = os.path.join(Path.home(), "Library", "Application Support", koboldcpp_core.APP_NAME, "Data")
+                    else: # Linux
+                        user_app_data_dir = os.path.join(Path.home(), ".local", "share", koboldcpp_core.APP_NAME)
+                    os.makedirs(user_app_data_dir, exist_ok=True)
+                
+                self.config["db_file"] = os.path.join(user_app_data_dir, default_db_basename)
+
                 # Ensure other nested dicts are also fresh copies if they exist in template
                 for key, value in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE.items():
-                    if isinstance(value, dict) and key not in ["default_args"]: # default_args handled
+                    if isinstance(value, dict) and key not in ["default_args", "db_file"]: 
                         self.config[key] = value.copy()
-
-                # Now, re-run the core's initialization logic on this fresh config to set conditional flags
-                # This is a bit indirect, but ensures consistency with how core modifies config on startup.
-                # A more direct way would be to call a specific core function if available, e.g., `core.apply_hardware_specific_defaults(self.config)`
-                # For now, let's re-initialize `self.gpu_info` as well.
-                temp_init_results = koboldcpp_core.initialize_launcher() # This loads from file again, not ideal.
-                # Better: Assume initialize_launcher can take a config to operate on.
-                # If not, we just save the default template and then load it.
                 
-                # Simpler: Save the pristine default template, then reload everything
-                koboldcpp_core.save_launcher_config(self.config) # Save the template as current config
+                # Save the pristine default template (with resolved db_file)
+                koboldcpp_core.save_launcher_config(self.config) 
                 
                 # Re-initialize the entire app state from the newly reset config file
                 core_init_results_after_reset = koboldcpp_core.initialize_launcher()
@@ -1259,13 +1278,17 @@ class KoboldLauncherGUI(ctk.CTk):
                 self.system_info = core_init_results_after_reset["system_info"]
                 self.gpu_info = core_init_results_after_reset["gpu_info"]
                 self.koboldcpp_executable = self.config.get("koboldcpp_executable", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["koboldcpp_executable"])
-                self.default_model_dir = self.config.get("default_gguf_dir", "") # Update internal state
-                self.db_path = self.config.get("db_file", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
+                self.default_model_dir = self.config.get("default_gguf_dir", "")
+                
+                # self.config["db_file"] from core_init_results_after_reset is now absolute
+                self.db_path = self.config["db_file"] 
 
-                self.load_settings_from_config() # Repopulate GUI from the now reset self.config
-                self.log_to_console("Configuration reset to defaults and saved."); messagebox.showinfo("Configuration Reset", "Configuration has been reset to defaults.")
+                self.load_settings_from_config() # Repopulate GUI
+                self.log_to_console(f"Configuration reset to defaults and saved. DB path set to: {self.db_path}"); 
+                messagebox.showinfo("Configuration Reset", "Configuration has been reset to defaults.")
             except Exception as e: 
-                self.log_to_console(f"Error during configuration reset: {e}"); messagebox.showerror("Error", f"An error occurred during configuration reset: {e}")
+                self.log_to_console(f"Error during configuration reset: {e}"); 
+                messagebox.showerror("Error", f"An error occurred during configuration reset: {e}")
 
 
     def launch_direct_defaults(self):
@@ -1526,28 +1549,22 @@ class KoboldLauncherGUI(ctk.CTk):
 
 
 if __name__ == "__main__":
-    # Ensure PyNVML is initialized if available (core already tries this)
-    # The core's atexit will handle shutdown.
     app = KoboldLauncherGUI()
     
     def on_closing_gui():
-        # Check if any KCPP process known to the GUI might be running
         kcpp_monitored_still_running = hasattr(app, 'kcpp_process_obj') and app.kcpp_process_obj and app.kcpp_process_obj.poll() is None
         last_direct_launch_still_running = app.last_process and app.last_process.poll() is None
-        
-        # process_running is a general flag, might be true even if specific Popen objects are None (e.g., after sweep)
         is_kcpp_potentially_running = app.process_running or kcpp_monitored_still_running or last_direct_launch_still_running
 
         if is_kcpp_potentially_running:
             if messagebox.askyesno("Exit Confirmation", 
                                    "A KoboldCpp process might be running or tuning is in progress.\n"
                                    "Do you want to stop all related processes and exit the launcher?"):
-                app.stop_all_kcpp_processes_forcefully() # This attempts to kill all known/swept KCPP
-                time.sleep(0.5) # Give a moment for processes to terminate
-                app.destroy() # Close the GUI
-            # If user says no, don't close, let them manage KCPP
+                app.stop_all_kcpp_processes_forcefully() 
+                time.sleep(0.5) 
+                app.destroy()
         else:
-            app.destroy() # No known KCPP running, just close
+            app.destroy()
 
     app.protocol("WM_DELETE_WINDOW", on_closing_gui)
     app.mainloop()
