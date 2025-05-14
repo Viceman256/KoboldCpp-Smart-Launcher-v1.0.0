@@ -1,0 +1,12 @@
+# Core dependencies
+customtkinter>=5.2.0
+
+# Optional but recommended for full functionality
+psutil>=5.9.0     # System information and process management
+pynvml>=11.5.0    # NVIDIA GPU VRAM monitoring
+rich>=13.4.0      # Improved CLI interface
+
+# Note: tkinter comes with Python, but you need to ensure it's installed
+# On Ubuntu/Debian: sudo apt-get install python3-tk
+# On Fedora: sudo dnf install python3-tkinter
+# On Windows/macOS: Included with official Python installer
