@@ -383,7 +383,9 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
     try:
         conn = sqlite3.connect(db_file, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
         cursor = conn.cursor()
-        vram_tolerance_percent = 0.25
+        vram_tolerance_percent = 0.25  # Tolerance for VRAM matching (e.g., +/- 25%)
+        model_size_tolerance_b = 0.5   # Absolute tolerance for model size matching in Billion Parameters (e.g., +/- 0.5B)
+
         if current_available_dedicated_vram_mb is None or current_available_dedicated_vram_mb <= 0:
             min_hist_vram, max_hist_vram, target_hist_vram_sort = -1, float('inf'), 8192 # Default sort target if no VRAM info
         else:
@@ -397,11 +399,12 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
             try: model_size_query_for_db = float(model_size_query_val)
             except (ValueError, TypeError): pass
 
+        # Updated query with model_size_tolerance_b
         query = """
             SELECT kobold_args_json, attempt_level_used, vram_at_launch_decision_mb, launch_outcome, approx_vram_used_kcpp_mb
             FROM launch_history
             WHERE model_filepath = ? AND model_quant_type = ? AND is_moe = ?
-              AND (? IS NULL OR ABS(model_size_b - ?) < 0.1) -- Model size match (within tolerance)
+              AND (? IS NULL OR model_size_b IS NULL OR ABS(model_size_b - ?) < ?) -- Model size match (or one is NULL, or within tolerance)
               AND (vram_at_launch_decision_mb BETWEEN ? AND ? OR vram_at_launch_decision_mb IS NULL) -- VRAM match or no VRAM history
             ORDER BY
               CASE WHEN launch_outcome LIKE 'SUCCESS_USER_CONFIRMED%' THEN 0
@@ -415,8 +418,9 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
             LIMIT 1
         """
         cursor.execute(query, (current_model_analysis['filepath'], current_model_analysis.get('quant'),
-                               current_model_analysis.get('is_moe', False), model_size_query_for_db,
-                               model_size_query_for_db, min_hist_vram, max_hist_vram,
+                               current_model_analysis.get('is_moe', False), 
+                               model_size_query_for_db, model_size_query_for_db, model_size_tolerance_b,
+                               min_hist_vram, max_hist_vram,
                                target_hist_vram_sort, target_hist_vram_sort))
         row = cursor.fetchone()
         if row:
@@ -426,7 +430,10 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
                         "historical_vram_mb": row[2], "outcome": row[3], "approx_vram_used_kcpp_mb": row[4]}
             except json.JSONDecodeError: return None
         return None
-    except sqlite3.Error: return None # Or log error
+    except sqlite3.Error as e:
+        # Consider logging this error if you have a logging mechanism
+        # print(f"Database error in find_best_historical_config: {e}") # For debugging
+        return None 
     finally:
         if conn: conn.close()
 
@@ -847,35 +854,86 @@ def get_level_from_overridetensors(override_tensor_str, model_analysis):
     return -10 if is_moe else -5
 
 def get_offload_description(model_analysis, attempt_level, current_ot_string):
-    if current_ot_string == "FAILURE_MAX_ATTEMPTS": return "MAX ATTEMPTS REACHED"
-    moe_max_gpu, moe_super_max_cpu = -25, 10; dense_max_gpu, dense_max_ffn_cpu = -17, 9
-    if not current_ot_string:
-        if model_analysis.get('is_moe') and attempt_level <= moe_max_gpu: return "MoE MAX GPU: All layers on GPU."
-        if not model_analysis.get('is_moe') and attempt_level <= dense_max_gpu: return "Dense MAX GPU: All layers on GPU."
-    gpu_layers = get_gpu_layers_for_level(model_analysis, attempt_level); total_layers = model_analysis.get('num_layers', 32)
-    layers_info = f" (GPU Layers: {gpu_layers}/{total_layers})"
-    if model_analysis.get('is_moe'):
-        desc_map = {10: "MoE ULTRA MAX CPU (All FFN)", 8: "MoE SUPER MAX CPU (All FFN + 50% Attn)", 6: "MoE SUPER CPU++ (All FFN + 25% Attn)",
-                    4: "MoE SUPER CPU+ (All FFN + 10% Attn)", 2: "MoE SUPER CPU (All FFN + 5% Attn)", 1: "MoE SUPER MAX EXPERT CPU",
-                    0: "MoE MAX EXPERT CPU", -2: "MoE CPU++ (All Exp FFN)", -4: "MoE CPU+ (Exp: down,up + 1/2gate)",
-                    -6: "MoE CPU/GPU Bal++ (Exp: down,up)", -8: "MoE CPU/GPU Bal+ (Exp: down+1/2up)", -10: "MoE GPU Focus (Exp: all down)",
-                    -12: "MoE GPU+ (Exp: 1/2 down)", -15: "MoE GPU++ (Exp: 1/4 down)", -18: "MoE GPU+++ (Exp: 1/8 down)",
-                    -21: "MoE GPU++++ (Exp: 1/16 down)", -25: "MoE MAX GPU"}
-        closest = max([k for k in desc_map.keys() if k <= attempt_level])
-        if attempt_level not in desc_map:
-            between_lower = closest; between_upper = min([k for k in desc_map.keys() if k > attempt_level], default=closest)
-            if between_lower != between_upper: return f"MoE Level {attempt_level} (between {desc_map[between_lower]} and {desc_map[between_upper]})" + layers_info
-        return desc_map.get(closest, f"MoE Custom (Lvl {attempt_level}, OT: {current_ot_string or 'None'})") + layers_info
-    else:
-        desc_map = {9: "Dense ULTRA MAX CPU (All Layers)", 7: "Dense SUPER MAX CPU (All FFN + 50% Attn)", 5: "Dense SUPER CPU (All FFN + 25% Attn)",
-                    3: "Dense SUPER CPU- (All FFN + 10% Attn)", 0: "Dense MAX FFN CPU", -1: "Dense CPU++ (Base FFN: up,down)",
-                    -3: "Dense CPU+ (Base FFN: up+1/2down)", -5: "Dense GPU Focus (Base FFN: all up)", -7: "Dense GPU+ (Base FFN: 1/4 up)",
-                    -9: "Dense GPU++ (Base FFN: 1/8 up)", -11: "Dense GPU+++ (Base FFN: 1/16 up)", -14: "Dense GPU++++ (Base FFN: 1/32 up)", -17: "Dense MAX GPU"}
-        closest = max([k for k in desc_map.keys() if k <= attempt_level])
-        if attempt_level not in desc_map:
-            between_lower = closest; between_upper = min([k for k in desc_map.keys() if k > attempt_level], default=closest)
-            if between_lower != between_upper: return f"Dense Level {attempt_level} (between {desc_map[between_lower]} and {desc_map[between_upper]})" + layers_info
-        return desc_map.get(closest, f"Dense Custom (Lvl {attempt_level}, OT: {current_ot_string or 'None'})") + layers_info
+    if current_ot_string == "FAILURE_MAX_ATTEMPTS":
+        return "MAX ATTEMPTS REACHED. No further CPU offload possible with current strategy."
+
+    is_moe = model_analysis.get('is_moe', False)
+    total_model_layers = model_analysis.get('num_layers', 32)
+    
+    # Determine base description using user's original detailed mapping logic
+    base_desc_from_map = "" # This will be populated by the logic below
+    
+    if is_moe:
+        moe_desc_map = {
+            10: "MoE ULTRA MAX CPU (All FFN)", 8: "MoE SUPER MAX CPU (All FFN + 50% Attn)", 
+            6: "MoE SUPER CPU++ (All FFN + 25% Attn)", 4: "MoE SUPER CPU+ (All FFN + 10% Attn)", 
+            2: "MoE SUPER CPU (All FFN + 5% Attn)", 1: "MoE SUPER MAX EXPERT CPU",
+            0: "MoE MAX EXPERT CPU", -2: "MoE CPU++ (All Exp FFN)", 
+            -4: "MoE CPU+ (Exp: down,up + 1/2gate)", -6: "MoE CPU/GPU Bal++ (Exp: down,up)", 
+            -8: "MoE CPU/GPU Bal+ (Exp: down+1/2up)", -10: "MoE GPU Focus (Exp: all down)",
+            -12: "MoE GPU+ (Exp: 1/2 down)", -15: "MoE GPU++ (Exp: 1/4 down)", 
+            -18: "MoE GPU+++ (Exp: 1/8 down)", -21: "MoE GPU++++ (Exp: 1/16 down)", 
+            -25: "MoE MAX GPU" # Represents no OT string, full GPU layers attempt
+        }
+        # Find the key in the map that is less than or equal to the attempt_level
+        # and is the largest such key (closest defined level at or below current attempt).
+        # If no such key (e.g., attempt_level is below the lowest defined key), default to the lowest.
+        applicable_keys = [k for k in moe_desc_map.keys() if k <= attempt_level]
+        closest_level_key = max(applicable_keys) if applicable_keys else min(moe_desc_map.keys())
+        
+        if attempt_level not in moe_desc_map: # If current level is between defined map points
+            lower_key = closest_level_key # This is the highest defined level <= attempt_level
+            # Find the smallest defined level > attempt_level for "between" description
+            upper_keys_candidates = [k for k in moe_desc_map.keys() if k > attempt_level]
+            upper_key = min(upper_keys_candidates) if upper_keys_candidates else lower_key # Fallback to lower_key if no upper
+            
+            if lower_key != upper_key and lower_key in moe_desc_map and upper_key in moe_desc_map:
+                base_desc_from_map = f"MoE Level {attempt_level} (between '{moe_desc_map[lower_key]}' and '{moe_desc_map[upper_key]}')"
+            else: # Fallback if "between" logic can't find distinct points or one is missing
+                base_desc_from_map = moe_desc_map.get(closest_level_key, f"MoE Custom (Lvl {attempt_level})")
+        else: # attempt_level is an exact key in the map
+            base_desc_from_map = moe_desc_map.get(attempt_level, f"MoE Custom (Lvl {attempt_level})")
+    else: # Dense models
+        dense_desc_map = {
+            9: "Dense ULTRA MAX CPU (All Layers)", 7: "Dense SUPER MAX CPU (All FFN + 50% Attn)", 
+            5: "Dense SUPER CPU (All FFN + 25% Attn)", 3: "Dense SUPER CPU- (All FFN + 10% Attn)", 
+            0: "Dense MAX FFN CPU", -1: "Dense CPU++ (Base FFN: up,down)",
+            -3: "Dense CPU+ (Base FFN: up+1/2down)", -5: "Dense GPU Focus (Base FFN: all up)", 
+            -7: "Dense GPU+ (Base FFN: 1/4 up)", -9: "Dense GPU++ (Base FFN: 1/8 up)", 
+            -11: "Dense GPU+++ (Base FFN: 1/16 up)", -14: "Dense GPU++++ (Base FFN: 1/32 up)", 
+            -17: "Dense MAX GPU" # Represents no OT string, full GPU layers attempt
+        }
+        applicable_keys = [k for k in dense_desc_map.keys() if k <= attempt_level]
+        closest_level_key = max(applicable_keys) if applicable_keys else min(dense_desc_map.keys())
+
+        if attempt_level not in dense_desc_map:
+            lower_key = closest_level_key
+            upper_keys_candidates = [k for k in dense_desc_map.keys() if k > attempt_level]
+            upper_key = min(upper_keys_candidates) if upper_keys_candidates else lower_key
+            
+            if lower_key != upper_key and lower_key in dense_desc_map and upper_key in dense_desc_map:
+                 base_desc_from_map = f"Dense Level {attempt_level} (between '{dense_desc_map[lower_key]}' and '{dense_desc_map[upper_key]}')"
+            else:
+                base_desc_from_map = dense_desc_map.get(closest_level_key, f"Dense Custom (Lvl {attempt_level})")
+        else:
+            base_desc_from_map = dense_desc_map.get(attempt_level, f"Dense Custom (Lvl {attempt_level})")
+
+    # Get the descriptive GPU layer count for this attempt level (for UI/understanding)
+    descriptive_gpu_layers_count = get_gpu_layers_for_level(model_analysis, attempt_level)
+    
+    # Construct the final detailed description
+    layers_info_detail = ""
+    if current_ot_string: # If an OT string is generated and active for this level
+        layers_info_detail = (f"Command will use '--gpulayers 999' (all {total_model_layers} layers targeted for GPU). "
+                              f"The OT string ('{current_ot_string}') then moves specific tensors to CPU. "
+                              f"(Descriptive layer equivalent for this OT level: {descriptive_gpu_layers_count}/{total_model_layers})")
+    else: # No OT string (e.g., "Max GPU" level where generate_overridetensors returns None)
+          # In this case, descriptive_gpu_layers_count (often 999 for max GPU levels) will be the actual target for --gpulayers in the command.
+        layers_info_detail = (f"Command will use '--gpulayers {descriptive_gpu_layers_count}' "
+                              f"(based on level {attempt_level}, out of {total_model_layers} total layers). "
+                              f"No specific tensor offload pattern active for this level.")
+
+    return f"{base_desc_from_map}. {layers_info_detail}"
 
 def generate_overridetensors(model_analysis, attempt_level):
     moe_s, dense_s = "_exps\\.weight", "\\.weight"; d, u, g = "ffn_down", "ffn_up", "ffn_gate"
@@ -982,71 +1040,114 @@ def get_command_to_run(executable_path, args_list):
     if executable_path.lower().endswith(".py"): return [sys.executable, executable_path] + args_list
     else: return [executable_path] + args_list
 
-def build_command(model_path, override_tensor_str, model_analysis, session_base_args_dict):
+def build_command(model_path, override_tensor_str_from_tuning, model_analysis, session_base_args_dict):
     current_cmd_args_dict = session_base_args_dict.copy()
-    current_cmd_args_dict["--model"] = model_path
+    current_cmd_args_dict["--model"] = model_path # Ensure model path is always set/updated
+
     model_analysis = model_analysis if isinstance(model_analysis, dict) else {}
 
-    if "--threads" in current_cmd_args_dict and current_cmd_args_dict["--threads"] == "auto":
-        if psutil_available:
+    # Auto-threads logic
+    if "--threads" in current_cmd_args_dict and str(current_cmd_args_dict["--threads"]).lower() == "auto":
+        if psutil_available: # global psutil_available should be defined
             try:
                 physical_cores = psutil.cpu_count(logical=False)
-                if physical_cores and physical_cores > 0: current_cmd_args_dict["--threads"] = str(max(1, physical_cores - 1 if physical_cores > 1 else 1))
-                else: current_cmd_args_dict["--threads"] = str(max(1, (psutil.cpu_count(logical=True) or 2) // 2))
-            except: current_cmd_args_dict["--threads"] = "4"
-        else: current_cmd_args_dict["--threads"] = "4"
+                if physical_cores and physical_cores > 0:
+                    current_cmd_args_dict["--threads"] = str(max(1, physical_cores - 1 if physical_cores > 1 else 1))
+                else: # Fallback to logical cores if physical not determined
+                    logical_cores = psutil.cpu_count(logical=True) or 2 # Default to 2 if cpu_count is None
+                    current_cmd_args_dict["--threads"] = str(max(1, logical_cores // 2))
+            except Exception: # Broad except for any psutil issue
+                current_cmd_args_dict["--threads"] = "4" # Fallback
+        else:
+            current_cmd_args_dict["--threads"] = "4" # Fallback if psutil not available
 
+    # Auto-nblas logic (remove if "auto", KoboldCpp handles its own default then)
     nblas_val = current_cmd_args_dict.get("--nblas")
     if nblas_val is None or (isinstance(nblas_val, str) and nblas_val.lower() == 'auto'):
-        if "--nblas" in current_cmd_args_dict: del current_cmd_args_dict["--nblas"]
+        if "--nblas" in current_cmd_args_dict:
+            del current_cmd_args_dict["--nblas"]
 
-    if override_tensor_str and override_tensor_str != "FAILURE_MAX_ATTEMPTS":
-        current_cmd_args_dict["--overridetensors"] = override_tensor_str
-        attempt_level = get_level_from_overridetensors(override_tensor_str, model_analysis)
-        gpulayers_val = current_cmd_args_dict.get("--gpulayers")
-        if gpulayers_val is None or (isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['auto', '999']):
-            current_cmd_args_dict["--gpulayers"] = str(get_gpu_layers_for_level(model_analysis, attempt_level))
+    # --- GPU Layers and OverrideTensors Logic ---
+    if override_tensor_str_from_tuning and override_tensor_str_from_tuning != "FAILURE_MAX_ATTEMPTS":
+        current_cmd_args_dict["--overridetensors"] = override_tensor_str_from_tuning
+        # CRITICAL CHANGE: If OT is active from tuning, always aim for max GPU layers as the base.
+        # The OT string will then carve out what's needed.
+        current_cmd_args_dict["--gpulayers"] = "999"
     else:
-        if "--overridetensors" in current_cmd_args_dict: del current_cmd_args_dict["--overridetensors"]
-        if current_cmd_args_dict.get("--gpulayers") == "999" and session_base_args_dict.get("--gpulayers") != "999":
-            original_gl = session_base_args_dict.get("--gpulayers")
-            if original_gl is not None and str(original_gl).lower() not in ['off', '0', 'auto']: current_cmd_args_dict["--gpulayers"] = str(original_gl)
-            elif original_gl is None or str(original_gl).lower() == 'auto':
-                if "--gpulayers" in current_cmd_args_dict: current_cmd_args_dict["--gpulayers"] = "auto"
-            elif str(original_gl).lower() in ['off', '0']: current_cmd_args_dict["--gpulayers"] = str(original_gl)
+        # No OT string active from tuning logic (e.g., "Max GPU" level where OT string is None, or direct launch).
+        # Ensure --overridetensors is not in the command if it was in session_base_args_dict or if OT string is None.
+        if "--overridetensors" in current_cmd_args_dict:
+            del current_cmd_args_dict["--overridetensors"]
+        
+        # --gpulayers should be what's in session_base_args_dict (reflecting config/user session edits for non-OT scenarios).
+        # current_cmd_args_dict started as a copy of session_base_args_dict.
+        base_gpulayers_val_from_session = session_base_args_dict.get("--gpulayers")
+        
+        if base_gpulayers_val_from_session is not None:
+            current_cmd_args_dict["--gpulayers"] = str(base_gpulayers_val_from_session)
+        else:
+            # Fallback if --gpulayers is somehow missing from session_base_args_dict (e.g. very old config or empty dict passed)
+            # Use the launcher's core template's default for --gpulayers.
+            template_default_gpulayers = DEFAULT_CONFIG_TEMPLATE["default_args"].get("--gpulayers", "auto")
+            current_cmd_args_dict["--gpulayers"] = str(template_default_gpulayers)
 
-    gpulayers_val = current_cmd_args_dict.get("--gpulayers")
-    if isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['off', '0']:
-        if "--gpulayers" in current_cmd_args_dict: del current_cmd_args_dict["--gpulayers"]
-        current_cmd_args_dict["--nogpulayers"] = True
+    # Subsequent logic for --gpulayers "off"/"0" to --nogpulayers conversion:
+    gpulayers_val_finalized = current_cmd_args_dict.get("--gpulayers")
+    if isinstance(gpulayers_val_finalized, str) and gpulayers_val_finalized.lower() in ['off', '0']:
+        if "--gpulayers" in current_cmd_args_dict: # Remove --gpulayers if it's "off" or "0"
+            del current_cmd_args_dict["--gpulayers"]
+        current_cmd_args_dict["--nogpulayers"] = True # Use --nogpulayers instead
     elif "--nogpulayers" in current_cmd_args_dict:
-        if not (isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['off', '0']):
+        # If --gpulayers is being set to something other than "off" or "0" (e.g., "999", "auto", a number),
+        # ensure --nogpulayers (which might have been True in session_base_args_dict) is removed.
+        if not (isinstance(gpulayers_val_finalized, str) and gpulayers_val_finalized.lower() in ['off', '0']):
             del current_cmd_args_dict["--nogpulayers"]
-
+    
+    # Auto-quantkv logic
     quantkv_val = current_cmd_args_dict.get("--quantkv")
     if quantkv_val is None or (isinstance(quantkv_val, str) and quantkv_val.lower() == 'auto'):
-        if "--quantkv" in current_cmd_args_dict: del current_cmd_args_dict["--quantkv"]
-        quant_upper = model_analysis.get('quant', 'unknown').upper(); model_size_b = model_analysis.get('size_b', 0)
+        if "--quantkv" in current_cmd_args_dict:
+            # Remove it if "auto" was specified, allowing KCPP default or smart default below to take over.
+            del current_cmd_args_dict["--quantkv"] 
+        
+        # Smart default for quantkv if "auto" was specified in config and not overridden by user
+        quant_upper = model_analysis.get('quant', 'unknown').upper()
+        model_size_b = model_analysis.get('size_b', 0)
         if any(q_check in quant_upper for q_check in ['Q5', 'Q6', 'Q8', 'F16', 'BF16', 'K_M', 'K_L', 'K_XL']) or \
            'XL' in quant_upper or (isinstance(model_size_b, (int, float)) and model_size_b >= 30):
-            current_cmd_args_dict["--quantkv"] = "1"
+            current_cmd_args_dict["--quantkv"] = "1" # Use Q8_0 for larger/higher quant models
+        # else: KCPP default will apply (often F16 if --quantkv is not present)
     elif isinstance(quantkv_val, str) and quantkv_val.lower() == 'off':
-        if "--quantkv" in current_cmd_args_dict: del current_cmd_args_dict["--quantkv"]
+        if "--quantkv" in current_cmd_args_dict: # Remove if explicitly "off"
+            del current_cmd_args_dict["--quantkv"]
 
+    # Auto-blasbatchsize logic
     blasbatchsize_val = current_cmd_args_dict.get("--blasbatchsize")
     if blasbatchsize_val is None or (isinstance(blasbatchsize_val, str) and blasbatchsize_val.lower() == 'auto'):
-        if "--blasbatchsize" in current_cmd_args_dict: del current_cmd_args_dict["--blasbatchsize"]
+        if "--blasbatchsize" in current_cmd_args_dict:
+            # Remove it if "auto", allowing KCPP default or smart default below.
+            del current_cmd_args_dict["--blasbatchsize"]
+        
+        # Smart default for blasbatchsize if "auto" was specified
         model_size_b = model_analysis.get('size_b', 0)
-        if model_analysis.get('is_moe', False): current_cmd_args_dict["--blasbatchsize"] = "128"
-        elif isinstance(model_size_b, (int, float)) and model_size_b > 20: current_cmd_args_dict["--blasbatchsize"] = "256"
-        else: current_cmd_args_dict["--blasbatchsize"] = "512"
+        if model_analysis.get('is_moe', False):
+            current_cmd_args_dict["--blasbatchsize"] = "128"
+        elif isinstance(model_size_b, (int, float)) and model_size_b > 20:
+            current_cmd_args_dict["--blasbatchsize"] = "256"
+        else: # Smaller models or unknown size
+            current_cmd_args_dict["--blasbatchsize"] = "512"
     elif isinstance(blasbatchsize_val, str) and blasbatchsize_val.lower() == 'off':
-        if "--blasbatchsize" in current_cmd_args_dict: del current_cmd_args_dict["--blasbatchsize"]
+        if "--blasbatchsize" in current_cmd_args_dict: # Remove if explicitly "off"
+            del current_cmd_args_dict["--blasbatchsize"]
 
+    # Ensure boolean flags are correctly represented (True) or removed if False
     boolean_flags_to_manage = ["--usecublas", "--flashattention", "--nommap", "--lowvram"]
     for flag in boolean_flags_to_manage:
         if flag in current_cmd_args_dict and current_cmd_args_dict[flag] is False:
             del current_cmd_args_dict[flag]
+        # If current_cmd_args_dict[flag] is True, it will be included by args_dict_to_list.
+        # If the flag is not in current_cmd_args_dict at all, it won't be included.
+
     return args_dict_to_list(current_cmd_args_dict)
     
 def kill_process(pid, force=True):
