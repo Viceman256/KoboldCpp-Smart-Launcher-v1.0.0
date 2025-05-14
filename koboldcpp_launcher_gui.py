@@ -141,25 +141,65 @@ class KoboldLauncherGUI(ctk.CTk):
 
 
     def check_koboldcpp_executable(self):
-        current_exe_path = self.koboldcpp_executable
-        if not os.path.exists(current_exe_path):
-            self.log_to_console(f"Warning: KoboldCPP executable '{current_exe_path}' not found at specified path.")
-            executable_basename = os.path.basename(current_exe_path)
-            found_exe_in_path = shutil.which(executable_basename) # Check PATH
+        # Get current executable path, prioritizing GUI entry if available
+        if hasattr(self, 'exe_path_entry') and self.exe_path_entry.winfo_exists():
+            current_exe_path_from_gui = self.exe_path_entry.get().strip()
+            if current_exe_path_from_gui: # Use GUI value if not empty
+                 self.koboldcpp_executable = current_exe_path_from_gui
+        # current_exe_path is now the one to check (either from config or updated from GUI)
+        current_exe_path_to_check = self.koboldcpp_executable
+        
+        config_needs_save = False # Flag to check if we need to save due to auto-correction
+
+        if not os.path.exists(current_exe_path_to_check):
+            self.log_to_console(f"Warning: KoboldCPP executable '{current_exe_path_to_check}' not found at specified path.")
+            executable_basename = os.path.basename(current_exe_path_to_check)
+            
+            found_exe_in_path = shutil.which(executable_basename) # Check PATH first
             if found_exe_in_path:
                 self.log_to_console(f"Found '{executable_basename}' in PATH: {found_exe_in_path}")
                 self.koboldcpp_executable = os.path.abspath(found_exe_in_path)
-                # Update GUI and config if changed
-                if hasattr(self, 'exe_path_entry') and self.exe_path_entry.winfo_exists():
-                    self.exe_path_entry.delete(0, "end")
-                    self.exe_path_entry.insert(0, self.koboldcpp_executable)
-                self.config["koboldcpp_executable"] = self.koboldcpp_executable
-                # Consider saving config immediately if auto-corrected
-                # self.save_config() 
-            else:
-                self.log_to_console(f"Could not find '{executable_basename}' in PATH either. Please verify the path in Settings.")
+                config_needs_save = True
+            # If not in PATH, and it's a .py script, check relative to launcher script
+            elif executable_basename.lower().endswith(".py"):
+                try:
+                    # __file__ might not be defined if running in some environments (e.g. frozen)
+                    # Safely get launcher script directory
+                    if getattr(sys, 'frozen', False): # If running as a frozen exe (e.g. PyInstaller)
+                        launcher_dir = os.path.dirname(sys.executable)
+                    else: # Running as a .py script
+                        launcher_dir = os.path.dirname(os.path.abspath(__file__))
+                    
+                    potential_relative_path = os.path.join(launcher_dir, executable_basename)
+                    if os.path.exists(potential_relative_path):
+                        self.log_to_console(f"Found '{executable_basename}' relative to launcher: {potential_relative_path}")
+                        self.koboldcpp_executable = os.path.abspath(potential_relative_path)
+                        config_needs_save = True
+                    else:
+                        self.log_to_console(f"Could not find '{executable_basename}' in PATH or relative to launcher. Please verify the path in Settings.")
+                except NameError: # __file__ not defined
+                     self.log_to_console(f"Could not determine launcher script directory to check relative path for '{executable_basename}'.")
+                     self.log_to_console(f"Please verify the path for '{executable_basename}' in Settings.")
+            else: # Not a .py script and not found in PATH
+                self.log_to_console(f"Could not find '{executable_basename}' in PATH. Please verify the path in Settings.")
         else:
-            self.log_to_console(f"KoboldCPP executable '{current_exe_path}' verified.")
+            self.log_to_console(f"KoboldCPP executable '{current_exe_path_to_check}' verified.")
+        
+        # If path was changed/corrected, update GUI and config
+        if config_needs_save:
+            if hasattr(self, 'exe_path_entry') and self.exe_path_entry.winfo_exists():
+                self.exe_path_entry.delete(0, "end")
+                self.exe_path_entry.insert(0, self.koboldcpp_executable)
+            self.config["koboldcpp_executable"] = self.koboldcpp_executable
+            self.log_to_console("KoboldCpp executable path updated. Saving configuration...")
+            self.save_config() # Save the updated config
+        elif current_exe_path_to_check != self.koboldcpp_executable :
+            # This case handles if GUI entry was different from self.koboldcpp_executable
+            # but the path from GUI *was* valid, so no auto-correction happened, but we should still update self.config
+            # and potentially save if the user expects GUI changes to persist without hitting "Save Settings" explicitly for this field.
+            # For now, this will be handled by the general "Save Settings" button or on app close.
+            # If you want instant save on valid GUI edit, that's a different behavior.
+            pass
       
     def load_settings_from_config(self):
         """Populates the Settings tab widgets from the current self.config."""
@@ -242,11 +282,13 @@ class KoboldLauncherGUI(ctk.CTk):
         return success
 
     def setup_main_tab(self):
-        self.tab_main.grid_rowconfigure(0, weight=1) 
+        self.tab_main.grid_rowconfigure(0, weight=1) # Ensure the main tab's content frame can expand
+
+        # --- Model Selection View (Initially Visible) ---
         self.model_selection_frame = ctk.CTkFrame(self.tab_main)
         self.model_selection_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
         self.model_selection_frame.grid_columnconfigure(0, weight=1) 
-        self.model_selection_frame.grid_rowconfigure(5, weight=1) 
+        self.model_selection_frame.grid_rowconfigure(5, weight=1) # For console to expand
 
         title_label = ctk.CTkLabel(self.model_selection_frame, text="KoboldCpp Model Launcher", font=ctk.CTkFont(size=20, weight="bold"))
         title_label.grid(row=0, column=0, columnspan=3, padx=10, pady=(10, 15), sticky="n")
@@ -261,6 +303,7 @@ class KoboldLauncherGUI(ctk.CTk):
         self.model_info_label = ctk.CTkLabel(model_controls_frame, text="No model selected", justify="left")
         self.model_info_label.grid(row=1, column=0, columnspan=3, padx=10, pady=(0,10), sticky="w")
 
+        # VRAM display for the main model selection view
         vram_frame = ctk.CTkFrame(self.model_selection_frame)
         vram_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         vram_frame.grid_columnconfigure(1, weight=1) 
@@ -292,15 +335,33 @@ class KoboldLauncherGUI(ctk.CTk):
         self.console.grid(row=1, column=0, padx=10, pady=(0,5), sticky="nsew")
         self.console.configure(state="disabled")
 
+
+        # --- Tuning Mode View (Initially Hidden) ---
         self.tuning_mode_frame = ctk.CTkFrame(self.tab_main) 
         self.tuning_mode_frame.grid_columnconfigure(0, weight=1) 
-        self.tuning_mode_frame.grid_rowconfigure(7, weight=1) 
+        # Configure row 8 (new last row for kcpp_output_console_frame) to expand
+        self.tuning_mode_frame.grid_rowconfigure(8, weight=1) 
 
         tuning_title_label = ctk.CTkLabel(self.tuning_mode_frame, text="Auto-Tuning Session", font=ctk.CTkFont(size=18, weight="bold"))
         tuning_title_label.grid(row=0, column=0, padx=10, pady=10, sticky="n")
 
+        # NEW: VRAM Display Frame for Tuning View
+        self.tuning_view_vram_frame = ctk.CTkFrame(self.tuning_mode_frame)
+        self.tuning_view_vram_frame.grid(row=1, column=0, padx=10, pady=(5,10), sticky="ew") # Placed after title
+        self.tuning_view_vram_frame.grid_columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(self.tuning_view_vram_frame, text="GPU Status:").grid(row=0, column=0, padx=(10,5), pady=5, sticky="w")
+        self.tuning_view_vram_progress = ctk.CTkProgressBar(self.tuning_view_vram_frame, height=18)
+        self.tuning_view_vram_progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.tuning_view_vram_progress.set(0)
+        self.tuning_view_vram_text = ctk.CTkLabel(self.tuning_view_vram_frame, text="Scanning...")
+        self.tuning_view_vram_text.grid(row=0, column=2, padx=(5,10), pady=5, sticky="e")
+        ctk.CTkButton(self.tuning_view_vram_frame, text="Refresh", width=60, command=self.refresh_vram).grid(row=0, column=3, padx=(5,10), pady=5, sticky="e")
+        # END NEW VRAM Display Frame
+
+        # OT Strategy Display (Adjusted row index)
         ot_strategy_display_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        ot_strategy_display_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        ot_strategy_display_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew") # Was row=1, now row=2
         ot_strategy_display_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(ot_strategy_display_frame, text="Current OT Strategy:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, padx=5, pady=2, sticky="w")
         self.tuning_ot_level_label = ctk.CTkLabel(ot_strategy_display_frame, text="Level: N/A", justify="left")
@@ -314,16 +375,18 @@ class KoboldLauncherGUI(ctk.CTk):
         self.tuning_gpu_layers_label = ctk.CTkLabel(ot_strategy_display_frame, text="GPU Layers: N/A", justify="left", wraplength=600)
         self.tuning_gpu_layers_label.grid(row=5, column=0, columnspan=2, padx=10, pady=1, sticky="w")
 
+        # Proposed Command Display (Adjusted row index)
         proposed_command_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        proposed_command_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+        proposed_command_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew") # Was row=2, now row=3
         proposed_command_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(proposed_command_frame, text="Proposed Command:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5, pady=2, sticky="w")
         self.tuning_proposed_command_text = ctk.CTkTextbox(proposed_command_frame, height=120, wrap="word")
         self.tuning_proposed_command_text.grid(row=1, column=0, padx=5, pady=2, sticky="nsew")
         self.tuning_proposed_command_text.configure(state="disabled")
 
+        # Tuning Action Buttons (Adjusted row indices)
         self.tuning_actions_primary_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.tuning_actions_primary_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+        self.tuning_actions_primary_frame.grid(row=4, column=0, padx=10, pady=5, sticky="ew") # Was row=3, now row=4
         self.tuning_actions_primary_frame.grid_columnconfigure((0,1), weight=1)
         self.btn_tune_launch_monitor = ctk.CTkButton(self.tuning_actions_primary_frame, text="Launch & Monitor Output", command=self.launch_and_monitor_for_tuning, height=35, fg_color="seagreen", hover_color="darkgreen")
         self.btn_tune_launch_monitor.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
@@ -331,7 +394,7 @@ class KoboldLauncherGUI(ctk.CTk):
         self.btn_tune_skip_launch_direct.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
         self.tuning_actions_secondary_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.tuning_actions_secondary_frame.grid(row=4, column=0, padx=10, pady=0, sticky="ew") 
+        self.tuning_actions_secondary_frame.grid(row=5, column=0, padx=10, pady=0, sticky="ew") # Was row=4, now row=5
         self.tuning_actions_secondary_frame.grid_columnconfigure((0,1,2), weight=1)
         self.btn_tune_more_gpu = ctk.CTkButton(self.tuning_actions_secondary_frame, text="More GPU (↓ Level)", command=lambda: self.adjust_ot_level(-1))
         self.btn_tune_more_gpu.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
@@ -341,13 +404,13 @@ class KoboldLauncherGUI(ctk.CTk):
         self.btn_tune_edit_args.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
         self.tuning_model_config_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.tuning_model_config_frame.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
+        self.tuning_model_config_frame.grid(row=6, column=0, padx=10, pady=5, sticky="ew") # Was row=5, now row=6
         self.tuning_model_config_frame.grid_columnconfigure(0, weight=1) 
         self.btn_tune_edit_model_perm_args = ctk.CTkButton(self.tuning_model_config_frame, text="Edit Base Args (Permanent for This Model)", command=self.edit_permanent_model_args)
         self.btn_tune_edit_model_perm_args.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
         self.tuning_actions_navigation_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.tuning_actions_navigation_frame.grid(row=6, column=0, padx=10, pady=5, sticky="ew")
+        self.tuning_actions_navigation_frame.grid(row=7, column=0, padx=10, pady=5, sticky="ew") # Was row=6, now row=7
         self.tuning_actions_navigation_frame.grid_columnconfigure((0,1,2), weight=1)
         self.btn_tune_new_gguf = ctk.CTkButton(self.tuning_actions_navigation_frame, text="New GGUF Model", command=self.select_new_gguf_during_tuning)
         self.btn_tune_new_gguf.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
@@ -356,14 +419,18 @@ class KoboldLauncherGUI(ctk.CTk):
         self.btn_tune_quit_tuning = ctk.CTkButton(self.tuning_actions_navigation_frame, text="End Tuning Session", command=self.end_tuning_session, fg_color="firebrick", hover_color="darkred")
         self.btn_tune_quit_tuning.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
         
+        # KCPP Live Output Console (Adjusted row index)
         self.kcpp_output_console_frame = ctk.CTkFrame(self.tuning_mode_frame)
-        self.kcpp_output_console_frame.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
+        self.kcpp_output_console_frame.grid(row=8, column=0, padx=10, pady=10, sticky="nsew") # Was row=7, now row=8
         self.kcpp_output_console_frame.grid_columnconfigure(0, weight=1); self.kcpp_output_console_frame.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(self.kcpp_output_console_frame, text="KoboldCpp Output (during monitoring):").grid(row=0, column=0, padx=5, pady=2, sticky="w")
         self.kcpp_live_output_text = ctk.CTkTextbox(self.kcpp_output_console_frame, wrap="char") 
         self.kcpp_live_output_text.grid(row=1, column=0, padx=5, pady=2, sticky="nsew")
         self.kcpp_live_output_text.configure(state="disabled")
 
+        # Initially hide tuning_mode_frame and show model_selection_frame
+        # This is handled by _show_model_selection_view() called from __init__
+        
     def _show_model_selection_view(self):
         if hasattr(self, 'tuning_mode_frame') and self.tuning_mode_frame.winfo_exists():
             self.tuning_mode_frame.grid_remove()
@@ -536,19 +603,19 @@ class KoboldLauncherGUI(ctk.CTk):
 
     def _get_param_definitions_for_dialog(self):
         return [
-            {"name": "Threads", "param": "--threads", "help": "CPU threads ('auto' or number)."},
-            {"name": "BLAS Threads (nblas)", "param": "--nblas", "help": "BLAS threads ('auto' or number)."},
-            {"name": "Context Size", "param": "--contextsize", "help": "Max context tokens (e.g., 4096, 16384)."},
-            {"name": "Prompt Limit", "param": "--promptlimit", "help": "Max prompt tokens (<= contextsize)."},
-            {"name": "GPU Layers", "param": "--gpulayers", "help": "Layers on GPU. 'off', 0 for CPU. 999 for max."},
+            {"name": "Threads", "param": "--threads", "help": "CPU threads ('auto' or number).", "type": "str_auto_num"},
+            {"name": "BLAS Threads (nblas)", "param": "--nblas", "help": "BLAS threads ('auto' or number).", "type": "str_auto_num"},
+            {"name": "Context Size", "param": "--contextsize", "help": "Max context tokens (e.g., 4096, 16384).", "type": "str_num"},
+            {"name": "Prompt Limit", "param": "--promptlimit", "help": "Max prompt tokens (<= contextsize).", "type": "str_num"},
+            {"name": "GPU Layers", "param": "--gpulayers", "help": "Layers on GPU. 'auto', 'off', 0 for CPU. 999 for max.", "type": "str_auto_num"},
             {"name": "Use CUBLAS", "param": "--usecublas", "help": "Enable CUDA BLAS (NVIDIA).", "type": "bool"},
             {"name": "Flash Attention", "param": "--flashattention", "help": "Enable FlashAttention.", "type": "bool"},
             {"name": "No Memory Map", "param": "--nommap", "help": "Disable memory mapping.", "type": "bool"},
             {"name": "Low VRAM Mode", "param": "--lowvram", "help": "Enable low VRAM mode.", "type": "bool"},
-            {"name": "QuantKV", "param": "--quantkv", "help": "K/V cache quant ('auto', 'off', or number)."},
-            {"name": "BLAS Batch Size", "param": "--blasbatchsize", "help": "BLAS batch size ('auto', 'off', or number)."},
-            {"name": "Port", "param": "--port", "help": "Web UI port (default 5000)."},
-            {"name": "Default Gen Amount", "param": "--defaultgenamt", "help": "Default tokens to generate."}
+            {"name": "QuantKV", "param": "--quantkv", "help": "K/V cache quant ('auto', 'off', or number: 0=F32, 1=Q8_0, etc.).", "type": "str_auto_num"},
+            {"name": "BLAS Batch Size", "param": "--blasbatchsize", "help": "BLAS batch size ('auto', 'off', or number).", "type": "str_auto_num"},
+            {"name": "Port", "param": "--port", "help": "Web UI port (default 5000).", "type": "str_num"},
+            {"name": "Default Gen Amount", "param": "--defaultgenamt", "help": "Default tokens to generate.", "type": "str_num"}
         ]
 
     def edit_base_args_for_tuning_session(self):
@@ -1445,20 +1512,57 @@ class KoboldLauncherGUI(ctk.CTk):
 
 
     def update_vram_display(self, used_mb: float, total_mb: float, message_from_core: str = ""):
+        # Update for main model selection view's VRAM display
         if hasattr(self, 'vram_progress') and self.vram_progress.winfo_exists():
             if total_mb > 0:
                 percentage = used_mb / total_mb
                 self.vram_progress.set(percentage)
-                # Display will now show the more comprehensive message from core if numbers are simple
                 self.vram_text.configure(text=f"{message_from_core}")
                 
                 progress_color = "#28a745" # Green (default)
                 if percentage > 0.9: progress_color = "#dc3545" # Red
                 elif percentage > 0.7: progress_color = "#ffc107" # Yellow
                 self.vram_progress.configure(progress_color=progress_color)
-            else: # No total VRAM means detection likely failed or no dedicated GPU
+            else: 
                 self.vram_progress.set(0)
+                # Ensure this line is correctly terminated before the next block
                 self.vram_text.configure(text=f"{message_from_core if message_from_core else 'VRAM info unavailable'}")
+
+        # --- Update for tuning view's VRAM display ---
+        if hasattr(self, 'tuning_view_vram_progress') and self.tuning_view_vram_progress.winfo_exists():
+            if total_mb > 0:
+                percentage = used_mb / total_mb
+                self.tuning_view_vram_progress.set(percentage)
+                if hasattr(self, 'tuning_view_vram_text') and self.tuning_view_vram_text.winfo_exists():
+                    self.tuning_view_vram_text.configure(text=f"{message_from_core}")
+                
+                progress_color = "#28a745" 
+                if percentage > 0.9: progress_color = "#dc3545"
+                elif percentage > 0.7: progress_color = "#ffc107"
+                self.tuning_view_vram_progress.configure(progress_color=progress_color)
+            else:
+                self.tuning_view_vram_progress.set(0)
+                if hasattr(self, 'tuning_view_vram_text') and self.tuning_view_vram_text.winfo_exists():
+                    self.tuning_view_vram_text.configure(text=f"{message_from_core if message_from_core else 'VRAM info unavailable'}")
+        # --- END Update for tuning view ---
+        
+        # --- NEW: Update for tuning view's VRAM display ---
+        if hasattr(self, 'tuning_view_vram_progress') and self.tuning_view_vram_progress.winfo_exists():
+            if total_mb > 0:
+                percentage = used_mb / total_mb
+                self.tuning_view_vram_progress.set(percentage)
+                if hasattr(self, 'tuning_view_vram_text') and self.tuning_view_vram_text.winfo_exists():
+                    self.tuning_view_vram_text.configure(text=f"{message_from_core}")
+                
+                progress_color = "#28a745" 
+                if percentage > 0.9: progress_color = "#dc3545"
+                elif percentage > 0.7: progress_color = "#ffc107"
+                self.tuning_view_vram_progress.configure(progress_color=progress_color)
+            else:
+                self.tuning_view_vram_progress.set(0)
+                if hasattr(self, 'tuning_view_vram_text') and self.tuning_view_vram_text.winfo_exists():
+                    self.tuning_view_vram_text.configure(text=f"{message_from_core if message_from_core else 'VRAM info unavailable'}")
+        # --- END NEW Update for tuning view ---
 
 
     def refresh_vram(self):
