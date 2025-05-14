@@ -8,77 +8,80 @@ import threading  # Not used in this slimmed down core, but often useful
 import signal  # Not used in this slimmed down core
 import sqlite3
 from datetime import datetime, timezone
-import pathlib  # Not directly used but good for path manipulation if needed
+import pathlib  # Now used for Path.home()
 import shutil
 import platform
 from pathlib import Path
 
-def detect_koboldcpp_capabilities(executable_path):
-    """Detect available features/flags in KoboldCpp executable"""
-    try:
-        process = subprocess.run([executable_path, "--help"], 
-                               capture_output=True, text=True, check=False, timeout=5)
-        
-        if process.returncode != 0:
-            # Try to get more info from stderr if available
-            error_detail = process.stderr.strip() if process.stderr else "Unknown error"
-            return {"error": f"Failed to run KoboldCpp with --help. RC={process.returncode}. Detail: {error_detail}", 
-                    "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
-                    "auto_quantkv": False, "overridetensors": False, "available_args": []} # More pessimistic defaults
-        
-        output = process.stdout
-        
-        features = {
-            "cuda": "--usecublas" in output,
-            "rocm": "--usehipblas" in output or "--userocmblas" in output,
-            "vulkan": "--vulkan" in output, # Assuming --vulkan for Vulkan backend
-            "flash_attn": "--flashattention" in output,
-            "auto_quantkv": "--quantkv auto" in output or ("--quantkv" in output and "auto" in output), # Check for "auto" specifically
-            "overridetensors": "--overridetensors" in output,
-            "available_args": []
-        }
-        
-        arg_pattern = r'(-{1,2}[\w-]+)' # Simple pattern for flags
-        features["available_args"] = re.findall(arg_pattern, output)
-        
-        return features
-    except subprocess.TimeoutExpired:
-        return {"error": "Timeout running KoboldCpp with --help", 
-                "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
-                "auto_quantkv": False, "overridetensors": False, "available_args": []}
-    except Exception as e:
-        # Default to some common features if help fails, but log the error
-        # This fallback is optimistic; ideally, a failed help means we don't know.
-        # For broader compatibility, let's be more conservative on error.
-        return {"error": str(e), 
-                "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
-                "auto_quantkv": False, "overridetensors": False, "available_args": []}
+# --- Appdirs Integration ---
+APP_NAME = "KoboldCppLauncher"
+APP_AUTHOR = "KoboldCppLauncherUser" # Generic author, can be changed
 
+appdirs_available = False
+try:
+    import appdirs
+    appdirs_available = True
+except ImportError:
+    appdirs_available = False
+
+def _get_user_app_config_dir():
+    """Gets the user-specific configuration directory for the application."""
+    if appdirs_available:
+        path = appdirs.user_config_dir(APP_NAME, APP_AUTHOR)
+    else:
+        # Fallback to a common pattern: ~/.config/AppName on Linux/Mac, ~/AppData/Roaming/AppName on Win (simplified)
+        if sys.platform == "win32":
+            path = os.path.join(Path.home(), "AppData", "Roaming", APP_NAME, "Config")
+        elif sys.platform == "darwin":
+            path = os.path.join(Path.home(), "Library", "Application Support", APP_NAME, "Config")
+        else: # Linux and other XDG-like systems
+            path = os.path.join(Path.home(), ".config", APP_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def _get_user_app_data_dir():
+    """Gets the user-specific data directory for the application."""
+    if appdirs_available:
+        path = appdirs.user_data_dir(APP_NAME, APP_AUTHOR)
+    else:
+        # Fallback to a common pattern: ~/.local/share/AppName on Linux/Mac, ~/AppData/Local/AppName on Win (simplified)
+        if sys.platform == "win32":
+            path = os.path.join(Path.home(), "AppData", "Local", APP_NAME, "Data")
+        elif sys.platform == "darwin":
+            path = os.path.join(Path.home(), "Library", "Application Support", APP_NAME, "Data") # Often same as config on Mac
+        else: # Linux and other XDG-like systems
+            path = os.path.join(Path.home(), ".local", "share", APP_NAME)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 # --- Constants and Configuration ---
-CONFIG_FILE = "kobold_launcher_config.json"
+_CONFIG_FILE_BASENAME = "kobold_launcher_config.json"
+CONFIG_FILE = os.path.join(_get_user_app_config_dir(), _CONFIG_FILE_BASENAME)
+
+_DB_FILE_BASENAME_DEFAULT = "kobold_launcher_history.db" # Default name, path resolved at runtime
+
 DEFAULT_CONFIG_TEMPLATE = {
     "koboldcpp_executable": "koboldcpp.exe" if sys.platform == "win32" else "./koboldcpp",
     "default_gguf_dir": "",
     "last_used_gguf_dir": "",
-    "db_file": "kobold_launcher_history.db",
+    "db_file": _DB_FILE_BASENAME_DEFAULT, # Store basename, actual path resolved in load_config
     "first_run_completed": False,
     "first_run_intro_shown": False,
     "color_mode": "auto",
-    "auto_open_webui": True, 
+    "auto_open_webui": True,
     "gpu_detection": {
         "nvidia": True,
         "amd": True,
         "intel": True,
-        "apple": True # For Apple Silicon
+        "apple": True
     },
     "model_specific_args": {},
     "default_args": {
         "--threads": "auto",
-        "--usecublas": True, # This will be conditional based on detection later
+        "--usecublas": True,
         "--contextsize": "16384",
         "--promptlimit": "16000",
-        "--flashattention": True, # Also conditional
+        "--flashattention": True,
         "--port": "5000",
         "--defaultgenamt": "2048",
         "--gpulayers": "auto",
@@ -99,27 +102,26 @@ DEFAULT_CONFIG_TEMPLATE = {
         "failed to allocate memory on gpu", "vram allocation failed",
         "llama_new_context_with_model: failed to load model", "unable to initialize backend",
         "failed to load model", "model load failed", "segmentation fault", "aborted",
-        "illegal instruction", "clblast error", "opencl error", "rocm error", "hip error" # Added ROCm errors
+        "illegal instruction", "clblast error", "opencl error", "rocm error", "hip error"
     ]
 }
 
 # --- Runtime Variables & Optional Dependency Management ---
 pynvml_available = False
 psutil_available = False
-pyadlx_available = False # For AMD on Windows via Adrenalin SDK
-wmi_available = False    # For Windows Management Instrumentation
-pyze_available = False   # For Intel Level Zero
-metal_available = False  # For Apple Metal on macOS
+pyadlx_available = False 
+wmi_available = False    
+pyze_available = False   
+metal_available = False  
 
 try:
     import pynvml
-    pynvml.nvmlInit() # Initialize NVML early if available
+    pynvml.nvmlInit() 
     pynvml_available = True
 except ImportError:
     pynvml_available = False
-except pynvml.NVMLError: # Catch init errors too
+except pynvml.NVMLError: 
     pynvml_available = False
-
 
 try:
     import psutil
@@ -129,9 +131,7 @@ except ImportError:
 
 if sys.platform == "win32":
     try:
-        import pyadlx # Placeholder, actual import and init might be more complex
-        # A more robust check would be to try initializing or getting a GPU list
-        # For now, import success is the check.
+        import pyadlx 
         pyadlx_available = True 
     except ImportError:
         pyadlx_available = False
@@ -143,28 +143,25 @@ if sys.platform == "win32":
 
 try:
     import pyze.api as pyze_api 
-    # Basic check: try to initialize and get driver count
     pyze_api.zeInit(0) 
     num_drivers_ptr = pyze_api.new_uint32_tp()
     pyze_api.zeDriverGet(num_drivers_ptr, None)
     if pyze_api.uint32_tp_value(num_drivers_ptr) > 0:
          pyze_available = True
-    # pyze_api.zeDriverGet_post(num_drivers_ptr) # If using SWIG's typical post-call cleanup
-    pyze_api.delete_uint32_tp(num_drivers_ptr) # Manual cleanup if needed for SWIG pointers
+    pyze_api.delete_uint32_tp(num_drivers_ptr) 
 except ImportError:
     pyze_available = False
-except Exception: # Catch pyze init errors (DLL not found, etc.)
+except Exception: 
     pyze_available = False
-
 
 if sys.platform == "darwin":
     try:
         import metal 
-        if metal.MTLCopyAllDevices(): # Check if any Metal devices are actually found
+        if metal.MTLCopyAllDevices(): 
              metal_available = True
     except ImportError:
         metal_available = False
-    except Exception: # Other errors during Metal init
+    except Exception: 
         metal_available = False
 
 # --- Datetime Adapters for SQLite ---
@@ -195,58 +192,103 @@ sqlite3.register_converter("TIMESTAMP", convert_datetime)
 
 # --- Configuration Management ---
 def save_launcher_config(config_to_save):
+    """Saves the configuration. Expects config_to_save["db_file"] to be absolute path."""
     try:
+        # Ensure config dir exists (should be handled by _get_user_app_config_dir())
+        # os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True) # Redundant if _get_user_app_config_dir used correctly
+
+        config_copy_for_saving = config_to_save.copy()
+        
+        # If db_file is in the default data directory, store only its basename in the JSON
+        # Otherwise, store the full path (allows user to place DB elsewhere)
+        default_data_dir = _get_user_app_data_dir()
+        if "db_file" in config_copy_for_saving:
+            db_file_abs = os.path.abspath(config_copy_for_saving["db_file"])
+            if os.path.dirname(db_file_abs) == default_data_dir:
+                config_copy_for_saving["db_file"] = os.path.basename(db_file_abs)
+            # else: it's already an absolute path, store as is.
+
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config_to_save, f, indent=4)
+            json.dump(config_copy_for_saving, f, indent=4)
         return True, f"Configuration saved to {CONFIG_FILE}"
     except Exception as e:
         return False, f"Error saving configuration: {e}"
 
 def load_config():
+    """Loads configuration. Resolves db_file to an absolute path."""
     config_data = DEFAULT_CONFIG_TEMPLATE.copy()
+    
+    # Resolve default db_file path initially (in case config file doesn't exist or db_file is missing)
+    default_db_basename = DEFAULT_CONFIG_TEMPLATE["db_file"]
+    config_data["db_file"] = os.path.join(_get_user_app_data_dir(), default_db_basename)
+    # Ensure default data dir exists for the DB
+    os.makedirs(os.path.dirname(config_data["db_file"]), exist_ok=True)
+
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 user_config = json.load(f)
+            
+            # Merge user_config into config_data (which started as DEFAULT_CONFIG_TEMPLATE)
             for key, default_value in DEFAULT_CONFIG_TEMPLATE.items():
                 if key in user_config:
                     if isinstance(default_value, dict) and isinstance(user_config[key], dict):
-                        if key in ["default_args", "gpu_detection", "model_specific_args"]: # Keys to deep merge
+                        # Deep merge for specific dictionary keys
+                        if key in ["default_args", "gpu_detection", "model_specific_args"]:
                             merged_sub_dict = default_value.copy()
                             merged_sub_dict.update(user_config[key])
                             config_data[key] = merged_sub_dict
-                        else:
-                             config_data[key] = user_config[key]
-                    else:
+                        else: # Shallow update for other dicts (overwrites default)
+                            config_data[key] = user_config[key]
+                    else: # Non-dict values, user_config takes precedence
                         config_data[key] = user_config[key]
             
+            # Ensure all default_args keys are present in the loaded config_data["default_args"]
             if "default_args" in config_data:
                 for arg_key, arg_default_val in DEFAULT_CONFIG_TEMPLATE["default_args"].items():
                     if arg_key not in config_data["default_args"]:
                         config_data["default_args"][arg_key] = arg_default_val
-            else:
+            else: # Should not happen if merge logic is correct, but as a safeguard
                 config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
 
+            # Special handling for db_file path resolution
+            db_file_from_user_config = user_config.get("db_file", default_db_basename)
+            if not os.path.isabs(db_file_from_user_config):
+                config_data["db_file"] = os.path.join(_get_user_app_data_dir(), db_file_from_user_config)
+            else: # User specified an absolute path
+                config_data["db_file"] = db_file_from_user_config
+            
+            # Ensure directory for the potentially custom db_file exists
+            os.makedirs(os.path.dirname(config_data["db_file"]), exist_ok=True)
+
             return config_data, True, f"Loaded configuration from {CONFIG_FILE}"
+
         except Exception as e:
+            # On error, config_data is already based on DEFAULT_CONFIG_TEMPLATE
+            # and its db_file is already resolved to default data dir.
+            # Ensure all default_args keys are present if the partial load messed them up.
             if "default_args" not in config_data:
                  config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
-            else: # Ensure all keys are present even on load error
+            else:
                 for arg_key, arg_default_val in DEFAULT_CONFIG_TEMPLATE["default_args"].items():
                     if arg_key not in config_data["default_args"]:
                         config_data["default_args"][arg_key] = arg_default_val
-            return config_data, False, f"Error loading {CONFIG_FILE}: {e}. Using defaults and ensuring all default_args keys."
+            return config_data, False, f"Error loading {CONFIG_FILE}: {e}. Using defaults and ensuring all default_args keys. DB path set to default."
     else:
+        # No config file found, config_data is DEFAULT_CONFIG_TEMPLATE, db_file already resolved.
+        # Ensure all default_args keys are present (should be by default from template copy)
         config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
-        return config_data, False, f"No config file found at {CONFIG_FILE}. Using defaults."
+        return config_data, False, f"No config file found at {CONFIG_FILE}. Using defaults. DB path set to default."
 
 
 # --- Database Functions ---
-def init_db(db_file):
+def init_db(db_file): # db_file is expected to be an absolute path
     conn = None
     try:
+        # Directory for db_file should have been created by load_config or _get_user_app_data_dir
+        # but an extra check here is harmless.
         db_dir = os.path.dirname(db_file)
-        if db_dir and not os.path.exists(db_dir):
+        if db_dir: # Ensure db_dir is not empty (e.g. if db_file is just "name.db" in CWD)
             os.makedirs(db_dir, exist_ok=True)
 
         conn = sqlite3.connect(db_file, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
@@ -262,12 +304,27 @@ def init_db(db_file):
                 UNIQUE(model_filepath, vram_at_launch_decision_mb, kobold_args_json, attempt_level_used)
             )
         ''')
+        # Add new columns if they don't exist (idempotent)
         cols_to_check = {"launch_outcome": "TEXT", "approx_vram_used_kcpp_mb": "INTEGER"}
         for col, col_type in cols_to_check.items():
             try:
                 cursor.execute(f"SELECT {col} FROM launch_history LIMIT 1")
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError: # Column does not exist
                 cursor.execute(f"ALTER TABLE launch_history ADD COLUMN {col} {col_type}")
+        
+        # Add Indexes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lh_model_details ON launch_history (model_filepath, model_quant_type, is_moe);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lh_timestamp ON launch_history (timestamp DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lh_model_filepath ON launch_history (model_filepath);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lh_launch_outcome ON launch_history (launch_outcome);")
+        # Composite index for find_best_historical_config's common query pattern
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_lh_lookup_for_best ON launch_history (
+                model_filepath, model_quant_type, is_moe, 
+                launch_outcome, vram_at_launch_decision_mb, attempt_level_used, timestamp DESC
+            );
+        """)
+
         conn.commit()
         return True, f"Database initialized at {db_file}"
     except sqlite3.Error as e:
@@ -305,7 +362,7 @@ def save_config_to_db(db_file, model_filepath, model_analysis, vram_at_decision_
             ''', (model_filepath, model_size_to_db, model_analysis.get('quant'), model_analysis.get('is_moe', False),
                   vram_at_decision_mb_int, args_json_str, attempt_level, outcome, approx_vram_used_kcpp_mb_int, current_timestamp))
             success_msg = f"Saved configuration to database (Outcome: {outcome})."
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError: # Entry already exists, update it
             cursor.execute('''
                 UPDATE launch_history SET launch_outcome = ?, approx_vram_used_kcpp_mb = ?, timestamp = ?
                 WHERE model_filepath = ? AND (vram_at_launch_decision_mb = ? OR (vram_at_launch_decision_mb IS NULL AND ? IS NULL))
@@ -328,13 +385,14 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
         cursor = conn.cursor()
         vram_tolerance_percent = 0.25
         if current_available_dedicated_vram_mb is None or current_available_dedicated_vram_mb <= 0:
-            min_hist_vram, max_hist_vram, target_hist_vram_sort = -1, float('inf'), 8192
+            min_hist_vram, max_hist_vram, target_hist_vram_sort = -1, float('inf'), 8192 # Default sort target if no VRAM info
         else:
             min_hist_vram = current_available_dedicated_vram_mb * (1 - vram_tolerance_percent)
             max_hist_vram = current_available_dedicated_vram_mb * (1 + vram_tolerance_percent)
             target_hist_vram_sort = current_available_dedicated_vram_mb
+        
         model_size_query_val = current_model_analysis.get('size_b')
-        model_size_query_for_db = None
+        model_size_query_for_db = None # Handle if size_b is not a valid float for DB query
         if not (isinstance(model_size_query_val, str) or model_size_query_val is None):
             try: model_size_query_for_db = float(model_size_query_val)
             except (ValueError, TypeError): pass
@@ -343,16 +401,18 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
             SELECT kobold_args_json, attempt_level_used, vram_at_launch_decision_mb, launch_outcome, approx_vram_used_kcpp_mb
             FROM launch_history
             WHERE model_filepath = ? AND model_quant_type = ? AND is_moe = ?
-              AND (? IS NULL OR ABS(model_size_b - ?) < 0.1)
-              AND (vram_at_launch_decision_mb BETWEEN ? AND ? OR vram_at_launch_decision_mb IS NULL)
+              AND (? IS NULL OR ABS(model_size_b - ?) < 0.1) -- Model size match (within tolerance)
+              AND (vram_at_launch_decision_mb BETWEEN ? AND ? OR vram_at_launch_decision_mb IS NULL) -- VRAM match or no VRAM history
             ORDER BY
               CASE WHEN launch_outcome LIKE 'SUCCESS_USER_CONFIRMED%' THEN 0
                    WHEN launch_outcome LIKE 'SUCCESS_USER_SAVED_GOOD%' THEN 1
                    WHEN launch_outcome LIKE 'SUCCESS_LOAD_VRAM_OK%' THEN 2
                    WHEN launch_outcome LIKE 'SUCCESS_USER_DIRECT_LAUNCH%' THEN 3
-                   ELSE 10 END ASC,
-              ABS(COALESCE(vram_at_launch_decision_mb, ?) - ?) ASC,
-              attempt_level_used ASC, timestamp DESC LIMIT 1
+                   ELSE 10 END ASC, -- Prioritize best outcomes
+              ABS(COALESCE(vram_at_launch_decision_mb, ?) - ?) ASC, -- Closest VRAM match
+              attempt_level_used ASC, -- Prefer lower attempt levels (more GPU) for similar VRAM/outcome
+              timestamp DESC -- Newest entry as tie-breaker
+            LIMIT 1
         """
         cursor.execute(query, (current_model_analysis['filepath'], current_model_analysis.get('quant'),
                                current_model_analysis.get('is_moe', False), model_size_query_for_db,
@@ -366,7 +426,7 @@ def find_best_historical_config(db_file, current_model_analysis, current_availab
                         "historical_vram_mb": row[2], "outcome": row[3], "approx_vram_used_kcpp_mb": row[4]}
             except json.JSONDecodeError: return None
         return None
-    except sqlite3.Error: return None
+    except sqlite3.Error: return None # Or log error
     finally:
         if conn: conn.close()
 
@@ -386,7 +446,7 @@ def get_history_entries(db_file, limit=50):
     finally:
         if conn: conn.close()
 
-# --- System Information and Hardware Detection ---
+# --- System Information and Hardware Detection --- (Content from original prompt, no changes needed here for this request)
 def get_system_info():
     info = {"cpu_model": "Unknown", "cpu_cores_physical": "N/A", "cpu_cores_logical": "N/A",
             "ram_total_gb": 0, "ram_free_gb": 0, "ram_used_percent": 0,
@@ -424,11 +484,46 @@ def get_system_info():
         except Exception: pass
     return info
 
+def detect_koboldcpp_capabilities(executable_path):
+    """Detect available features/flags in KoboldCpp executable"""
+    try:
+        process = subprocess.run([executable_path, "--help"], 
+                               capture_output=True, text=True, check=False, timeout=5)
+        
+        if process.returncode != 0:
+            error_detail = process.stderr.strip() if process.stderr else "Unknown error"
+            return {"error": f"Failed to run KoboldCpp with --help. RC={process.returncode}. Detail: {error_detail}", 
+                    "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
+                    "auto_quantkv": False, "overridetensors": False, "available_args": []}
+        
+        output = process.stdout
+        
+        features = {
+            "cuda": "--usecublas" in output,
+            "rocm": "--usehipblas" in output or "--userocmblas" in output,
+            "vulkan": "--vulkan" in output, 
+            "flash_attn": "--flashattention" in output,
+            "auto_quantkv": "--quantkv auto" in output or ("--quantkv" in output and "auto" in output), 
+            "overridetensors": "--overridetensors" in output,
+            "available_args": []
+        }
+        
+        arg_pattern = r'(-{1,2}[\w-]+)' 
+        features["available_args"] = re.findall(arg_pattern, output)
+        
+        return features
+    except subprocess.TimeoutExpired:
+        return {"error": "Timeout running KoboldCpp with --help", 
+                "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
+                "auto_quantkv": False, "overridetensors": False, "available_args": []}
+    except Exception as e:
+        return {"error": str(e), 
+                "cuda": False, "rocm": False, "vulkan": False, "flash_attn": False, 
+                "auto_quantkv": False, "overridetensors": False, "available_args": []}
 
 def get_gpu_info_nvidia():
     if not pynvml_available: return None
     try:
-        # pynvml.nvmlInit() # Already initialized globally
         device_count = pynvml.nvmlDeviceGetCount()
         if device_count > 0:
             handle = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -441,20 +536,16 @@ def get_gpu_info_nvidia():
                     "total_mb": total_mb, "used_percent": used_percent,
                     "message": f"NVIDIA {name}: {free_mb:.0f}/{total_mb:.0f}MB free ({used_percent:.1f}% used)"}
         return {"success": False, "type": "NVIDIA_NONE_FOUND", "message": "No NVIDIA GPUs detected."}
-    except pynvml.NVMLError as e: # More specific exception for NVML issues
+    except pynvml.NVMLError as e: 
         return {"success": False, "type": "NVIDIA_ERROR", "message": f"NVIDIA NVML error: {e}"}
     except Exception as e:
         return {"success": False, "type": "NVIDIA_ERROR", "message": f"NVIDIA generic error: {e}"}
-    # Global nvmlShutdown will be handled at script exit
 
 def get_gpu_info_amd():
-    """Get GPU information for AMD GPUs on Linux (rocm-smi) or Windows (WMI)."""
     if sys.platform == "linux":
         try:
             rocm_check = subprocess.run(["which", "rocm-smi"], capture_output=True, text=True, check=False, timeout=2)
-            if rocm_check.returncode != 0: return None # rocm-smi not found
-            
-            # Try JSON output first (newer rocm-smi)
+            if rocm_check.returncode != 0: return None
             try:
                 json_proc = subprocess.run(
                     ["rocm-smi", "--showmeminfo", "vram", "--showproductname", "--json"],
@@ -463,20 +554,15 @@ def get_gpu_info_amd():
                 data = json.loads(json_proc.stdout)
                 card_key = next(iter(data)) 
                 gpu_data = data[card_key]
-
                 total_mem_bytes_str = gpu_data.get("VRAM Total Memory (B)")
                 used_mem_bytes_str = gpu_data.get("VRAM Used Memory (B)")
-
                 if not total_mem_bytes_str or not used_mem_bytes_str:
                      return {"success": False, "type": "AMD", "message": "VRAM info missing in rocm-smi JSON."}
-
                 total_mb_val = int(total_mem_bytes_str) / (1024**2)
                 used_mb_val = int(used_mem_bytes_str) / (1024**2)
                 free_mb_val = total_mb_val - used_mb_val
-                
                 gpu_name_val = gpu_data.get("Card SKU", gpu_data.get("Card series", "AMD Radeon GPU"))
                 used_percent_val = (used_mb_val / total_mb_val * 100) if total_mb_val > 0 else 0
-                
                 return {
                     "success": True, "type": "AMD", "name": gpu_name_val,
                     "free_mb": free_mb_val, "total_mb": total_mb_val,
@@ -484,7 +570,6 @@ def get_gpu_info_amd():
                     "message": f"AMD {gpu_name_val}: {free_mb_val:.0f}/{total_mb_val:.0f}MB free ({used_percent_val:.1f}% used) [rocm-smi JSON]"
                 }
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, StopIteration):
-                # Fallback to original regex parsing if JSON fails
                 rocm_info = subprocess.run(["rocm-smi", "--showmeminfo", "vram"], capture_output=True, text=True, check=False, timeout=3)
                 if rocm_info.returncode != 0: return None
                 output = rocm_info.stdout
@@ -505,7 +590,7 @@ def get_gpu_info_amd():
                     return {"success": True, "type": "AMD", "name": gpu_name, "free_mb": free_mb,
                             "total_mb": total_val, "used_percent": used_percent,
                             "message": f"AMD {gpu_name}: {free_mb:.0f}/{total_val:.0f}MB free ({used_percent:.1f}% used) [rocm-smi Regex]"}
-                return None # Regex also failed
+                return None 
         except (FileNotFoundError, subprocess.SubprocessError, Exception) as e:
             return {"success": False, "type": "AMD_LINUX_ERROR", "message": f"AMD Linux rocm-smi error: {e}"}
 
@@ -522,80 +607,58 @@ def get_gpu_info_amd():
                             "free_mb": 0, "total_mb": total_mb, "used_percent": 0,
                             "message": f"AMD {gpu_wmi.Name}: Total {total_mb:.0f}MB (Free VRAM not available via WMI)"
                         }
-                return None # No AMD GPU found
+                return None 
             except Exception as e_wmi:
                 return {"success": False, "type": "AMD_WMI_ERROR", "message": f"AMD WMI error: {e_wmi}"}
-        # pyadlx could be added here if a reliable way to get free VRAM is found
-    return None # Unsupported OS for this specific AMD check
+    return None
 
 def get_gpu_info_intel():
-    """Get GPU information for Intel GPUs using pyze (Level Zero) or WMI (Windows)."""
     if pyze_available:
         try:
-            # pyze_api.zeInit(0) # Already done in global check for pyze_available
             num_drivers_ptr = pyze_api.new_uint32_tp()
             pyze_api.zeDriverGet(num_drivers_ptr, None)
             num_drivers = pyze_api.uint32_tp_value(num_drivers_ptr)
-
             if num_drivers == 0:
-                pyze_api.delete_uint32_tp(num_drivers_ptr)
-                return None 
-
+                pyze_api.delete_uint32_tp(num_drivers_ptr); return None 
             drivers_array = pyze_api.new_ze_driver_handle_t_array(num_drivers)
             pyze_api.zeDriverGet(num_drivers_ptr, drivers_array)
             pyze_api.delete_uint32_tp(num_drivers_ptr)
-
             for i in range(num_drivers):
                 driver = pyze_api.ze_driver_handle_t_array_getitem(drivers_array, i)
                 num_devices_ptr = pyze_api.new_uint32_tp()
                 pyze_api.zeDeviceGet(driver, num_devices_ptr, None)
                 num_devices = pyze_api.uint32_tp_value(num_devices_ptr)
-
                 if num_devices == 0:
-                    pyze_api.delete_uint32_tp(num_devices_ptr)
-                    continue
-
+                    pyze_api.delete_uint32_tp(num_devices_ptr); continue
                 devices_array = pyze_api.new_ze_device_handle_t_array(num_devices)
                 pyze_api.zeDeviceGet(driver, num_devices_ptr, devices_array)
                 pyze_api.delete_uint32_tp(num_devices_ptr)
-
                 for j in range(num_devices):
                     device = pyze_api.ze_device_handle_t_array_getitem(devices_array, j)
                     props = pyze_api.ze_device_properties_t()
-                    # Important: Initialize structure before passing to C (SWIG might handle some, but explicit is safer)
                     pyze_api.memset(pyze_api.addressof(props), 0, pyze_api.sizeof(props))
-                    props.stype = pyze_api.ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES # Set stype
-                    
+                    props.stype = pyze_api.ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES
                     pyze_api.zeDeviceGetProperties(device, props)
-
                     if props.type == pyze_api.ZE_DEVICE_TYPE_GPU:
-                        gpu_name_bytes = bytes(props.name) # Cast char array to bytes
+                        gpu_name_bytes = bytes(props.name) 
                         gpu_name = gpu_name_bytes.decode('utf-8', errors='ignore').rstrip('\x00')
-                        
-                        # Get memory properties for total VRAM
                         mem_props_count_ptr = pyze_api.new_uint32_tp()
                         pyze_api.zeDeviceGetMemoryProperties(device, mem_props_count_ptr, None)
                         mem_props_count = pyze_api.uint32_tp_value(mem_props_count_ptr)
                         total_vram_bytes = 0
                         if mem_props_count > 0:
                             mem_props_array = pyze_api.new_ze_device_memory_properties_t_array(mem_props_count)
-                            for k_mem in range(mem_props_count): # Initialize each struct in array
+                            for k_mem in range(mem_props_count): 
                                 mem_prop_item_ptr = pyze_api.ze_device_memory_properties_t_array_getitem_ptr(mem_props_array, k_mem)
                                 pyze_api.memset(mem_prop_item_ptr, 0, pyze_api.sizeof(pyze_api.ze_device_memory_properties_t()))
                                 pyze_api.ze_device_memory_properties_t_stype_set(mem_prop_item_ptr, pyze_api.ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES)
-
                             pyze_api.zeDeviceGetMemoryProperties(device, mem_props_count_ptr, mem_props_array)
                             for k_mem in range(mem_props_count):
                                 mem_prop_item = pyze_api.ze_device_memory_properties_t_array_getitem(mem_props_array, k_mem)
-                                # Summing device-local memory. ZE_DEVICE_MEMORY_PROPERTY_FLAG_DEVICE_LOCAL
-                                # This requires checking flags, but for now, sum all `totalSize` for simplicity.
-                                # A more accurate way: iterate, check `mem_prop_item.flags` for device local bit.
                                 total_vram_bytes += mem_prop_item.totalSize
                             pyze_api.delete_ze_device_memory_properties_t_array(mem_props_array)
                         pyze_api.delete_uint32_tp(mem_props_count_ptr)
-
                         total_mb = total_vram_bytes / (1024**2)
-                        
                         pyze_api.delete_ze_device_handle_t_array(devices_array)
                         pyze_api.delete_ze_driver_handle_t_array(drivers_array)
                         return {
@@ -605,7 +668,7 @@ def get_gpu_info_intel():
                         }
                 pyze_api.delete_ze_device_handle_t_array(devices_array)
             pyze_api.delete_ze_driver_handle_t_array(drivers_array)
-            return None # No Intel GPU found by pyze
+            return None 
         except Exception as e_pyze:
             return {"success": False, "type": "INTEL_PYZE_ERROR", "message": f"Intel pyze error: {e_pyze}"}
 
@@ -620,37 +683,27 @@ def get_gpu_info_intel():
                         "free_mb": 0, "total_mb": total_mb, "used_percent": 0,
                         "message": f"Intel {gpu_wmi.Name}: Total {total_mb:.0f}MB (Free VRAM not available via WMI)"
                     }
-            return None # No Intel GPU found by WMI
+            return None 
         except Exception as e_wmi:
             return {"success": False, "type": "INTEL_WMI_ERROR", "message": f"Intel WMI error: {e_wmi}"}
     return None
 
 def get_gpu_info_apple_metal():
-    """Get GPU information for Apple Silicon/Metal GPUs on macOS."""
     if not (sys.platform == "darwin" and metal_available):
         return None
     try:
         devices = metal.MTLCopyAllDevices()
         if not devices:
             return {"success": False, "message": "Metal: No devices found."}
-        
-        # Prioritize discrete GPUs if any, otherwise take the first. M-series are integrated.
-        # This logic could be more sophisticated if Macs with dGPUs + M-chips become common.
-        # For now, assume the first device is representative or the primary integrated one.
         selected_device = devices[0]
-        for dev_test in devices: # Simple preference for non-low-power
+        for dev_test in devices: 
             if not dev_test.isLowPower():
-                selected_device = dev_test
-                break
-        
+                selected_device = dev_test; break
         gpu_name = selected_device.name()
-        # recommendedMaxWorkingSetSize is total VRAM usable by Metal for this device on unified memory.
         total_mb_approx = selected_device.recommendedMaxWorkingSetSize() / (1024**2) if selected_device.recommendedMaxWorkingSetSize() else 0
-        
-        # Free unified memory for GPU use is not a simple static value.
         return {
             "success": True, "type": "APPLE_METAL", "name": gpu_name,
-            "free_mb": 0, # Cannot easily determine "free" portion of unified memory dedicated to GPU
+            "free_mb": 0, 
             "total_mb": total_mb_approx, "used_percent": 0,
             "message": f"Metal {gpu_name}: Approx {total_mb_approx:.0f}MB GPU working set"
         }
@@ -658,45 +711,31 @@ def get_gpu_info_apple_metal():
         return {"success": False, "type": "APPLE_METAL_ERROR", "message": f"Apple Metal error: {e_metal}"}
                            
 def get_available_vram_mb():
-    # Try NVIDIA first
     nvidia_info = get_gpu_info_nvidia()
     if nvidia_info and nvidia_info.get("success"):
         return nvidia_info["free_mb"], nvidia_info["total_mb"], nvidia_info["message"], nvidia_info
-    
-    # Try AMD next
     amd_info = get_gpu_info_amd()
     if amd_info and amd_info.get("success"):
         return amd_info.get("free_mb", 0.0), amd_info.get("total_mb", 0.0), amd_info["message"], amd_info
-
-    # Try Intel 
     intel_info = get_gpu_info_intel()
     if intel_info and intel_info.get("success"):
         return intel_info.get("free_mb", 0.0), intel_info.get("total_mb", 0.0), intel_info["message"], intel_info
-
-    # Try Apple Metal (especially for M-series on macOS)
     if sys.platform == "darwin":
         metal_info = get_gpu_info_apple_metal()
         if metal_info and metal_info.get("success"):
             return metal_info.get("free_mb", 0.0), metal_info.get("total_mb", 0.0), metal_info["message"], metal_info
-
     sys_ram_info = get_system_info()
     fallback_msg = f"No dedicated GPU detected or info error. System RAM: {sys_ram_info['ram_free_gb']:.1f}/{sys_ram_info['ram_total_gb']:.1f}GB free."
     return 0.0, 0.0, fallback_msg, {"type": "Unknown", "name": "N/A", "free_mb": 0.0, "total_mb": 0.0, "message": fallback_msg, "success": False}
 
-# --- Model Analysis Functions ---
-# ... (rest of the file remains the same as in the prompt, from analyze_filename onwards) ...
-# ... Make sure to include the __main__ guard for pynvml.nvmlShutdown() if it's added later ...
+# --- Model Analysis Functions --- (Content from original prompt, no changes needed here for this request)
 def analyze_filename(filepath):
-    """Analyze a GGUF filename to extract model information."""
     filename_lower = os.path.basename(filepath).lower()
     analysis = {'filepath': filepath, 'is_moe': False, 'quant': 'unknown', 'size_b': 0, 'details': {}, 'num_layers': 32}
-    
     if 'moe' in filename_lower or 'mixtral' in filename_lower or 'grok' in filename_lower or re.search(r'-a\d+(\.\d+)?[bB]', filename_lower):
         analysis['is_moe'] = True
-    
     quant_match = re.search(r'(q[2-8](?:_[0ksmKSML]{1,2})?|iq[1-4](?:_[smlxSMLX]{1,2})?|bpw\d+|bf16|f16|f32|ggml|exl\d|awq|gptq|q_k_l|q_k_m|q_k_s|q_k_xl)', filename_lower)
     if quant_match: analysis['quant'] = quant_match.group(1).upper()
-    
     size_match = re.search(r'(?<![a-zA-Z0-9_])(\d{1,3}(?:\.\d{1,2})?)[bB](?![piA-Z0-9_])', filename_lower)
     if not size_match: size_match = re.search(r'(?<![a-zA-Z0-9_])(\d{1,3}(?:\.\d{1,2})?)[bB][-_]', filename_lower)
     if size_match:
@@ -704,7 +743,6 @@ def analyze_filename(filepath):
             size_val = float(size_match.group(1))
             analysis['size_b'] = int(size_val) if size_val.is_integer() else size_val
         except ValueError: pass
-    
     current_size_b = analysis.get('size_b', 0)
     if (isinstance(current_size_b, (int, float)) and current_size_b == 0) or not isinstance(current_size_b, (int, float)):
         if os.path.exists(filepath):
@@ -722,7 +760,6 @@ def analyze_filename(filepath):
                 if abs(closest_size - est_b) < closest_size * 0.25:
                     analysis['size_b'] = int(closest_size) if float(closest_size).is_integer() else closest_size
                     analysis['details']['size_is_estimated'] = True
-                    
     layer_patterns = [r'(\d+)l', r'l(\d+)', r'-(\d+)layers', r'(\d+)layers']
     model_layer_defaults = {'gemma': 28 if analysis.get('size_b') and analysis.get('size_b') < 10 else 32, 
                             'llama2': 32, 'llama3': 32, 'mistral': 32, 'mixtral': 32, 'qwen': 32,
@@ -1071,26 +1108,45 @@ def launch_process(cmd, capture_output=True, new_console=False, use_text_mode=Tr
     except Exception as e: return None, f"Launch error: {type(e).__name__}: {e}"
 
 def initialize_launcher():
+    """Initializes the launcher: loads config, inits DB, sets up dynamic defaults."""
     config, config_loaded, config_message = load_config()
-    db_file = config.get("db_file", DEFAULT_CONFIG_TEMPLATE["db_file"])
-    db_success, db_message = init_db(db_file)
+    
+    # db_file from config is now an absolute path resolved by load_config
+    db_absolute_path = config.get("db_file") # Should always be present and absolute
+    if not db_absolute_path: # Should not happen if load_config is correct
+        db_absolute_path = os.path.join(_get_user_app_data_dir(), _DB_FILE_BASENAME_DEFAULT)
+        config["db_file"] = db_absolute_path # Ensure it's in config for future saves
+        os.makedirs(os.path.dirname(db_absolute_path), exist_ok=True)
+
+
+    db_success, db_message = init_db(db_absolute_path)
+    
+    # Set auto threads if psutil available and config is 'auto'
     if psutil_available and config["default_args"].get("--threads") == "auto":
         try:
             physical_cores = psutil.cpu_count(logical=False)
-            if physical_cores and physical_cores > 0: config["default_args"]["--threads"] = str(max(1, physical_cores - 1 if physical_cores > 1 else 1))
-            else: config["default_args"]["--threads"] = str(max(1, (psutil.cpu_count(logical=True) or 2) // 2))
-        except Exception: config["default_args"]["--threads"] = "4"
-    elif config["default_args"].get("--threads") == "auto": config["default_args"]["--threads"] = "4"
+            if physical_cores and physical_cores > 0:
+                config["default_args"]["--threads"] = str(max(1, physical_cores - 1 if physical_cores > 1 else 1))
+            else:
+                config["default_args"]["--threads"] = str(max(1, (psutil.cpu_count(logical=True) or 2) // 2))
+        except Exception:
+            config["default_args"]["--threads"] = "4" # Fallback
+    elif config["default_args"].get("--threads") == "auto": # psutil not available but still auto
+        config["default_args"]["--threads"] = "4" # Fallback
     
     # Determine best GPU for conditional flags based on detection
     _, _, _, gpu_details = get_available_vram_mb()
     if gpu_details and gpu_details.get("type") == "NVIDIA":
-        config["default_args"]["--usecublas"] = True # Prefer True if NVIDIA detected
-    else: # If not NVIDIA, or detection failed, cublas is likely not applicable
+        config["default_args"]["--usecublas"] = True 
+    else:
         config["default_args"]["--usecublas"] = False
-        # Could also set other flags like --usehipblas if ROCm AMD detected etc.
+        # Example for AMD/ROCm (if KCPP adds a specific flag like --usehipblas)
         # if gpu_details and gpu_details.get("type") == "AMD" and sys.platform == "linux":
-        #     config["default_args"]["--usehipblas"] = True # Or similar flag if KCPP supports it
+        #     # Assuming a flag like '--usehipblas' or '--userocmblas'
+        #     # Check if KCPP capabilities report this flag before setting
+        #     kcpp_caps = detect_koboldcpp_capabilities(config.get("koboldcpp_executable"))
+        #     if kcpp_caps.get("rocm"): # "rocm" capability implies hipblas/rocmblas is available
+        #          config["default_args"]["--usehipblas"] = True # Or the correct flag name
 
     return {
         "initialized": config_loaded and db_success, "config": config,
@@ -1108,13 +1164,12 @@ def _cleanup_nvml():
             pass # Ignore errors during shutdown
 
 if __name__ == "__main__":
-    # This block is for testing the core library directly.
-    # It won't run when imported by launcher.py or launcher_gui.py.
-    
     print("KoboldCpp Core Library Test")
+    print(f"Default Config File Path: {CONFIG_FILE}")
     init_results = initialize_launcher()
     print(f"Initialization successful: {init_results['initialized']}")
     print(f"Config loaded: {init_results['config_loaded']} ({init_results['config_message']})")
+    print(f"  Config 'db_file' resolved to: {init_results['config']['db_file']}")
     print(f"DB status: {init_results['db_success']} ({init_results['db_message']})")
     
     print("\nSystem Info:")
@@ -1122,7 +1177,6 @@ if __name__ == "__main__":
         print(f"  {k}: {v}")
         
     print("\nGPU Info:")
-    # gpu_free, gpu_total, gpu_msg, gpu_dict = get_available_vram_mb()
     gpu_dict = init_results['gpu_info']
     if gpu_dict and gpu_dict.get("success"):
         print(f"  Type: {gpu_dict.get('type')}")
@@ -1133,38 +1187,26 @@ if __name__ == "__main__":
     else:
         print(f"  Message: {gpu_dict.get('message', 'GPU detection failed or no GPU found.')}")
 
-    # Test KoboldCpp capabilities detection (requires a dummy or real koboldcpp executable)
-    # Create a dummy executable for testing if one doesn't exist
     dummy_exe_name = "dummy_koboldcpp.bat" if sys.platform == "win32" else "dummy_koboldcpp.sh"
     if not os.path.exists(init_results["config"]["koboldcpp_executable"]):
         print(f"\nKoboldCpp executable '{init_results['config']['koboldcpp_executable']}' not found.")
-        print(f"Creating a dummy executable '{dummy_exe_name}' for capability detection test.")
+        print(f"Creating a dummy executable '{dummy_exe_name}' in CWD for capability detection test.")
+        # Create dummy in CWD for simplicity of test, real exe path is in config
+        dummy_exe_path_for_test_local = os.path.join(os.getcwd(), dummy_exe_name)
         if sys.platform == "win32":
-            with open(dummy_exe_name, "w") as f:
-                f.write("@echo off\n")
-                f.write("echo KoboldCpp Dummy Help\n")
-                f.write("echo --usecublas\n")
-                f.write("echo --usehipblas\n")
-                f.write("echo --vulkan\n")
-                f.write("echo --flashattention\n")
-                f.write("echo --quantkv auto\n")
-                f.write("echo --overridetensors\n")
-                f.write("echo --model <path>\n")
-                f.write("echo --port <port>\n")
+            with open(dummy_exe_path_for_test_local, "w") as f:
+                f.write("@echo off\n"); f.write("echo KoboldCpp Dummy Help\n")
+                f.write("echo --usecublas\n"); f.write("echo --usehipblas\n"); f.write("echo --vulkan\n")
+                f.write("echo --flashattention\n"); f.write("echo --quantkv auto\n"); f.write("echo --overridetensors\n")
+                f.write("echo --model <path>\n"); f.write("echo --port <port>\n")
         else:
-            with open(dummy_exe_name, "w") as f:
-                f.write("#!/bin/sh\n")
-                f.write("echo 'KoboldCpp Dummy Help'\n")
-                f.write("echo '--usecublas'\n")
-                f.write("echo '--usehipblas'\n")
-                f.write("echo '--vulkan'\n")
-                f.write("echo '--flashattention'\n")
-                f.write("echo '--quantkv auto'\n")
-                f.write("echo '--overridetensors'\n")
-                f.write("echo '--model <path>'\n")
-                f.write("echo '--port <port>'\n")
-            os.chmod(dummy_exe_name, 0o755)
-        kcpp_exe_path_for_test = os.path.abspath(dummy_exe_name)
+            with open(dummy_exe_path_for_test_local, "w") as f:
+                f.write("#!/bin/sh\n"); f.write("echo 'KoboldCpp Dummy Help'\n")
+                f.write("echo '--usecublas'\n"); f.write("echo '--usehipblas'\n"); f.write("echo '--vulkan'\n")
+                f.write("echo '--flashattention'\n"); f.write("echo '--quantkv auto'\n"); f.write("echo '--overridetensors'\n")
+                f.write("echo '--model <path>'\n"); f.write("echo '--port <port>'\n")
+            os.chmod(dummy_exe_path_for_test_local, 0o755)
+        kcpp_exe_path_for_test = dummy_exe_path_for_test_local
     else:
         kcpp_exe_path_for_test = init_results["config"]["koboldcpp_executable"]
 
@@ -1173,23 +1215,14 @@ if __name__ == "__main__":
     if "error" in caps:
         print(f"  Error detecting capabilities: {caps['error']}")
     else:
-        print(f"  CUDA: {caps.get('cuda')}")
-        print(f"  ROCm: {caps.get('rocm')}")
-        print(f"  Vulkan: {caps.get('vulkan')}")
-        print(f"  FlashAttention: {caps.get('flash_attn')}")
-        print(f"  AutoQuantKV: {caps.get('auto_quantkv')}")
-        print(f"  OverrideTensors: {caps.get('overridetensors')}")
-        # print(f"  Available Args: {caps.get('available_args')}") # Can be very long
+        print(f"  CUDA: {caps.get('cuda')}, ROCm: {caps.get('rocm')}, Vulkan: {caps.get('vulkan')}")
+        print(f"  FlashAttn: {caps.get('flash_attn')}, AutoQuantKV: {caps.get('auto_quantkv')}, OverrideTens: {caps.get('overridetensors')}")
 
-    # Clean up dummy executable if created
-    if kcpp_exe_path_for_test.endswith(dummy_exe_name) and os.path.exists(dummy_exe_name):
-        os.remove(dummy_exe_name)
-        print(f"\nRemoved dummy executable '{dummy_exe_name}'.")
+    if 'dummy_exe_path_for_test_local' in locals() and os.path.exists(dummy_exe_path_for_test_local):
+        os.remove(dummy_exe_path_for_test_local)
+        print(f"\nRemoved dummy executable '{dummy_exe_path_for_test_local}'.")
 
-    # Ensure NVML is shut down if it was initialized
     _cleanup_nvml()
 
-# Ensure NVML is shut down when the script/module is unloaded if it was initialized
-# This is more for when the core itself might be run standalone or as part of atexit.
 import atexit
 atexit.register(_cleanup_nvml)
