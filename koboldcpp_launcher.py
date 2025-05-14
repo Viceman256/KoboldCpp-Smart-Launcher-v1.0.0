@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # KoboldCpp Smart Launcher - VRAM Auto-Tuning Edition
-# Version 11.1.0 (CLI - Aligned with GUI features)
+# Version 11.2.0 (CLI - Aligned with GUI features)
 
 import json
 import sys
@@ -9,10 +9,10 @@ import subprocess
 import re
 import time
 import threading
-import signal # Keep for kill_process, though core might also use it
+import signal 
 import sqlite3
 from datetime import datetime, timezone
-import pathlib # Keep, might be useful for user paths
+import pathlib
 import webbrowser
 from typing import Dict, List, Tuple, Optional, Any, Union, Callable
 import platform
@@ -29,7 +29,6 @@ dependencies = {
     'tkinter': {'required': False, 'module': None, 'purpose': 'file open dialog'}
 }
 
-# Try to import dependencies
 for dep_name, dep_info in dependencies.items():
     try:
         if dep_name == 'tkinter':
@@ -44,7 +43,6 @@ for dep_name, dep_info in dependencies.items():
             print(f"Purpose: {dep_info['purpose']}")
             sys.exit(1)
 
-# Set up rich if available, otherwise fallback to basic printing
 if dependencies['rich']['module']:
     from rich.console import Console
     from rich.panel import Panel
@@ -55,9 +53,7 @@ if dependencies['rich']['module']:
     from rich.syntax import Syntax
     from rich.live import Live
     from rich import print as rich_print
-
     console = Console()
-
     def print_title(text): console.print(Panel(text, style="bold blue", expand=False, title_align="left"))
     def print_success(text): console.print(f"[bold green]✓[/bold green] {text}")
     def print_error(text): console.print(f"[bold red]✗[/bold red] {text}")
@@ -68,7 +64,7 @@ if dependencies['rich']['module']:
         if choices: return Prompt.ask(text, choices=choices, default=default)
         return Prompt.ask(text, default=default)
     def confirm(text, default=True): return Confirm.ask(text, default=default)
-else: # Basic print fallbacks
+else:
     def print_title(text): print(f"\n{'='*10} {text} {'='* (50-len(text) if len(text) < 50 else 0)}\n")
     def print_success(text): print(f"✓ {text}")
     def print_error(text): print(f"✗ {text}")
@@ -97,7 +93,6 @@ else: # Basic print fallbacks
 psutil = dependencies['psutil']['module']
 pynvml_module = dependencies['pynvml']['module']
 
-# --- Global Variables ---
 CONFIG: Dict[str, Any] = {}
 KOBOLDCPP_EXECUTABLE = ""
 DB_FILE = ""
@@ -108,7 +103,7 @@ MIN_VRAM_FREE_AFTER_LOAD_MB = 0
 LOADING_TIMEOUT_SECONDS = 60
 KOBOLD_SUCCESS_PATTERN = ""
 OOM_ERROR_KEYWORDS: List[str] = []
-LAUNCHER_CLI_VERSION = "11.1.1" # Static version for CLI display
+LAUNCHER_CLI_VERSION = "11.2.0" 
 
 last_gguf_directory = ""
 last_launched_process_info: Dict[str, Any] = {"pid": None, "process_obj": None, "command_list": []}
@@ -132,11 +127,9 @@ kcpp_success_event = threading.Event()
 kcpp_oom_event = threading.Event()
 kcpp_output_lines_shared: List[str] = []
 monitor_start_time: float = 0.0
-current_tuning_attempt_level = 0
-level_of_last_monitored_run = 0  # Track the level used for the most recent launch
+level_of_last_monitored_run = 0
 
 def handle_first_run_prompts_cli(config_dict: Dict[str, Any]) -> bool:
-    """Handles interactive first-run setup if needed. Modifies config_dict directly."""
     if config_dict.get('first_run_completed', False):
         return True
 
@@ -151,7 +144,6 @@ We need to configure a few things for the first run.
 
     import shutil
     detected_exe = None
-    # Simplified detection logic (can be expanded from previous versions if needed)
     default_exe_name = "koboldcpp.exe" if platform.system() == "Windows" else "./koboldcpp"
     if os.path.exists(default_exe_name):
         detected_exe = os.path.abspath(default_exe_name)
@@ -221,12 +213,12 @@ def select_gguf_file_cli() -> Optional[str]:
     
     while True:
         action_choice = prompt("Your choice", choices=list(main_menu_actions.keys()), default="s").lower()
-        if action_choice == 'q': return None # Signal to quit launcher
+        if action_choice == 'q': return None
         if action_choice == 'v':
-            view_db_history_cli() # Shows global history
-            continue # Re-prompt main menu
+            view_db_history_cli()
+            continue
         if action_choice == 's':
-            break # Proceed to file selection
+            break
 
     if dependencies['tkinter']['module']:
         try:
@@ -244,7 +236,7 @@ def select_gguf_file_cli() -> Optional[str]:
                 print_success(f"Selected: {os.path.basename(filepath)}")
                 return os.path.abspath(filepath)
             print_info("File selection cancelled via dialog.")
-            return "main_menu" # Special signal to re-show main menu
+            return "main_menu" 
         except Exception as e:
             print_warning(f"Tkinter file dialog failed: {e}. Falling back to manual input.")
 
@@ -253,7 +245,7 @@ def select_gguf_file_cli() -> Optional[str]:
         filepath_manual = prompt(f"Enter full path to GGUF model file (or press Enter to cancel and return to main menu)\n(Searches in: {default_dir_prompt} if relative path is given)").strip()
         if not filepath_manual:
             print_info("File selection cancelled via manual input.")
-            return "main_menu" # Signal to re-show main menu
+            return "main_menu"
 
         if os.path.isabs(filepath_manual):
             potential_path = filepath_manual
@@ -268,46 +260,13 @@ def select_gguf_file_cli() -> Optional[str]:
             return abs_path
         print_error(f"Path '{potential_path}' is not a valid .gguf file. Please try again.")
 
-def supports_color():
-    """Check if the terminal supports colors"""
-    if platform.system() == "Windows":
-        # Windows 10 with colorama or Windows Terminal supports ANSI colors
-        return os.environ.get("TERM") == "xterm" or \
-               "WT_SESSION" in os.environ or \
-               "ANSICON" in os.environ
-    
-    # For Unix-like systems
-    if os.environ.get("NO_COLOR") is not None:
-        return False
-    
-    if os.environ.get("TERM") == "dumb":
-        return False
-    
-    return True
-
-# Use platform-specific directory paths
-def get_config_directory():
-    """Get appropriate config directory for the current platform"""
-    home = Path.home()
-    
-    if platform.system() == "Windows":
-        # Windows: %APPDATA%\KoboldCppLauncher
-        return Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming"))) / "KoboldCppLauncher"
-    elif platform.system() == "Darwin":
-        # macOS: ~/Library/Application Support/KoboldCppLauncher
-        return home / "Library" / "Application Support" / "KoboldCppLauncher"
-    else:
-        # Linux: ~/.config/koboldcpp-launcher
-        xdg_config_home = os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))
-        return Path(xdg_config_home) / "koboldcpp-launcher"
-
 def view_db_history_cli(model_filepath_filter: Optional[str] = None):
     if model_filepath_filter:
         print_info(f"Loading history for model: {os.path.basename(model_filepath_filter)} from: {DB_FILE}")
     else:
         print_info(f"Loading global history from: {DB_FILE}")
         
-    all_history_entries = koboldcpp_core.get_history_entries(DB_FILE, limit=100) # Get more if filtering locally
+    all_history_entries = koboldcpp_core.get_history_entries(DB_FILE, limit=100)
     
     if not all_history_entries:
         print_info("No history records found.")
@@ -316,21 +275,19 @@ def view_db_history_cli(model_filepath_filter: Optional[str] = None):
     filtered_entries = []
     if model_filepath_filter:
         for entry in all_history_entries:
-            if entry[0] == model_filepath_filter: # entry[0] is model_filepath
+            if entry[0] == model_filepath_filter:
                 filtered_entries.append(entry)
         if not filtered_entries:
             print_info(f"No history records found for model: {os.path.basename(model_filepath_filter)}")
             return
-        display_entries = filtered_entries[:20] # Limit display after filtering
+        display_entries = filtered_entries[:20]
         title = f"Launch History for {os.path.basename(model_filepath_filter)} (Up to 20 most recent)"
     else:
-        display_entries = all_history_entries[:20] # Limit display for global
+        display_entries = all_history_entries[:20]
         title = "Global Launch History (Up to 20 most recent)"
-
 
     if dependencies['rich']['module']:
         table = Table(title=title)
-        # Note: Core's get_history_entries doesn't return kobold_args_json by default. "Key Args" will be N/A.
         cols = ["Model", "Size", "Quant", "MoE", "VRAM@L", "OT Lvl", "Outcome", "VRAM Used", "Timestamp", "Key Args"]
         styles = ["cyan", "magenta", None, "magenta", "green", "yellow", "blue", "green", "dim", "yellow"]
         justifies = ["left", "right", "center", "center", "right", "center", "left", "right", "left", "left"]
@@ -348,10 +305,10 @@ def view_db_history_cli(model_filepath_filter: Optional[str] = None):
             vram_used = f"{r_data[7]}MB" if r_data[7] is not None else "N/A"
             ts_obj = r_data[8]
             timestamp_str = ts_obj.strftime('%y-%m-%d %H:%M') if isinstance(ts_obj, datetime) else str(ts_obj)[:16]
-            key_args_str = "N/A" # Requires core modification to fetch kobold_args_json
+            key_args_str = "N/A" 
             table.add_row(model_name, size_b, quant, is_moe, vram_at_l, ot_lvl, outcome, vram_used, timestamp_str, key_args_str)
         console.print(table)
-    else: # Basic print
+    else: 
         print_title(title)
         header = f"{'Model':<28} | {'Sz':<5} | {'Quant':<9} | {'MoE':<3} | {'VRAM@L':<7} | {'Lvl':<3} | {'Outcome':<38} | {'VRAMUsed':<8} | {'Timestamp':<16}"
         print(header); print("-" * len(header))
@@ -381,16 +338,20 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
     permanent_args_changed = False
     arg_info_cli = {
         "--threads": {"help": "CPU threads. 'auto' or number.", "type": "str"},
+        "--nblas": {"help": "BLAS threads. 'auto' or number.", "type": "str"},
         "--contextsize": {"help": "Context tokens (e.g., 4096, 16384).", "type": "int_str"},
         "--promptlimit": {"help": "Max prompt tokens (e.g. 4000).", "type": "int_str"},
         "--usecublas": {"help": "Use CUBLAS (NVIDIA). (true/false)", "type": "bool"},
         "--flashattention": {"help": "Use FlashAttention. (true/false)", "type": "bool"},
+        "--nommap": {"help": "Disable memory mapping. (true/false)", "type": "bool"},
+        "--lowvram": {"help": "Enable low VRAM mode. (true/false)", "type": "bool"},
         "--port": {"help": "Network port (e.g., 5000).", "type": "int_str"},
         "--defaultgenamt": {"help": "Default tokens to generate (e.g., 2048).", "type": "int_str"},
         "--gpulayers": {"help": "GPU layers. 'auto', 'off', or number (e.g. 35, 999 for max).", "type": "str"},
         "--quantkv": {"help": "K/V cache quant. 'auto', 'off', or number (0=f32, 1=Q8_0).", "type": "str"},
         "--blasbatchsize": {"help": "BLAS batch size. 'auto', 'off', or number (e.g. 128, 512).", "type": "str"}
     }
+    # Ensure editable_arg_keys only contains args present in the core defaults template for consistency
     editable_arg_keys = sorted([k for k in arg_info_cli.keys() if k in koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"]])
     
     while True:
@@ -430,32 +391,23 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
             print_info(f"Current effective arguments for '{os.path.basename(model_path_for_specifics)}' will be saved as its new defaults.")
             if confirm(f"Save these as permanent defaults for {os.path.basename(model_path_for_specifics)}?", default=True):
                 if "model_specific_args" not in CONFIG: CONFIG["model_specific_args"] = {}
-                
-                # Ensure the model entry exists
                 if model_path_for_specifics not in CONFIG["model_specific_args"]:
                     CONFIG["model_specific_args"][model_path_for_specifics] = {}
                 
                 model_perms_to_set = CONFIG["model_specific_args"][model_path_for_specifics]
-                
-                # Determine the global baseline (Core Defaults + Global Config Defaults)
                 global_baseline_args = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
                 global_baseline_args.update(CONFIG.get("default_args", {}))
 
-                for arg_key in editable_arg_keys: # Iterate through all known editable args
-                    session_val_candidate = effective_display_args.get(arg_key) # This is the value we want to make permanent
+                for arg_key in editable_arg_keys:
+                    session_val_candidate = effective_display_args.get(arg_key)
                     global_default_val = global_baseline_args.get(arg_key)
                     
-                    if session_val_candidate is None: # If effective value is None (meaning it would use KCPP internal default)
-                        # Remove from model_specific if it was there, to revert to KCPP default
-                        if arg_key in model_perms_to_set:
-                            del model_perms_to_set[arg_key]
+                    if session_val_candidate is None:
+                        if arg_key in model_perms_to_set: del model_perms_to_set[arg_key]
                     elif session_val_candidate != global_default_val:
-                        # If the desired permanent value is different from global baseline, store it
                         model_perms_to_set[arg_key] = session_val_candidate
-                    else: # session_val_candidate is same as global_default_val
-                        # If it was previously model-specific, remove it (it now matches global)
-                        if arg_key in model_perms_to_set:
-                            del model_perms_to_set[arg_key]
+                    else: 
+                        if arg_key in model_perms_to_set: del model_perms_to_set[arg_key]
                 
                 if not CONFIG["model_specific_args"][model_path_for_specifics]:
                     del CONFIG["model_specific_args"][model_path_for_specifics]
@@ -463,7 +415,7 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
                 koboldcpp_core.save_launcher_config(CONFIG)
                 permanent_args_changed = True
                 print_success(f"Permanent args saved for {os.path.basename(model_path_for_specifics)}.")
-                current_session_args_dict.clear() # Session overrides are now part of the new permanent base
+                current_session_args_dict.clear() 
             else: print_info("Permanent edit cancelled.")
             continue
 
@@ -478,7 +430,7 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
             arg_type_info = arg_info_cli[arg_to_edit_key]['type']
             if is_toggle:
                 if arg_type_info == 'bool':
-                    current_effective_val = effective_display_args.get(arg_to_edit_key, False)
+                    current_effective_val = effective_display_args.get(arg_to_edit_key, False) # Default to False if not set for toggle
                     current_session_args_dict[arg_to_edit_key] = not current_effective_val
                     print_success(f"Toggled {arg_to_edit_key} for session to {'ENABLED' if current_session_args_dict[arg_to_edit_key] else 'DISABLED'}")
                 else: print_error(f"Cannot toggle {arg_to_edit_key}. Not boolean.")
@@ -498,12 +450,15 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
                     if new_val_str.lower() in ['true', 'yes', '1', 'on']: current_session_args_dict[arg_to_edit_key] = True
                     elif new_val_str.lower() in ['false', 'no', '0', 'off']: current_session_args_dict[arg_to_edit_key] = False
                     else: print_error(f"Invalid boolean for {arg_to_edit_key}. Use 'true' or 'false'."); continue
-                elif arg_type_info == 'int_str':
-                    try: int(new_val_str); current_session_args_dict[arg_to_edit_key] = new_val_str # Store as string
-                    except ValueError:
-                         if new_val_str.lower() in ['auto', 'off'] and arg_to_edit_key in ["--gpulayers", "--quantkv", "--blasbatchsize", "--threads"]:
+                elif arg_type_info == 'int_str': # For args that can be int or specific strings like "auto", "off"
+                    try: 
+                        # Test if it's an integer, but store as string to preserve "auto", "off"
+                        int(new_val_str) 
+                        current_session_args_dict[arg_to_edit_key] = new_val_str
+                    except ValueError: # Not a simple integer
+                         if new_val_str.lower() in ['auto', 'off'] and arg_to_edit_key in ["--gpulayers", "--quantkv", "--blasbatchsize", "--threads", "--nblas"]:
                              current_session_args_dict[arg_to_edit_key] = new_val_str.lower()
-                         else: # Could be a large number string not fitting int() but valid for KCPP
+                         else: # Could be a specific string arg for KCPP, or just a typo. Store as is.
                              current_session_args_dict[arg_to_edit_key] = new_val_str
                 else: # 'str'
                     current_session_args_dict[arg_to_edit_key] = new_val_str
@@ -511,10 +466,8 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
             except ValueError: print_error(f"Invalid value for {arg_to_edit_key}.")
         else: print_error("Invalid choice.")
 
-
 def _log_to_cli_live_output(text_line: str, live_obj: Optional[Live] = None, progress_obj: Optional[Progress] = None):
     print(text_line.strip())
-
 
 def monitor_kcpp_output_thread_target_cli(process: subprocess.Popen,
                                          success_event: threading.Event, oom_event: threading.Event,
@@ -557,6 +510,7 @@ def monitor_kcpp_output_thread_target_cli(process: subprocess.Popen,
 def launch_and_monitor_for_tuning_cli():
     global kcpp_process_obj, kcpp_monitor_thread, monitor_start_time
     global last_proposed_command_list_for_db, vram_at_decision_for_db, last_approx_vram_used_kcpp_mb
+    global level_of_last_monitored_run # Ensure this is global to be set here
 
     if kcpp_process_obj and kcpp_process_obj.poll() is None:
         print_warning("A KoboldCpp process is already being monitored. Please stop it first or wait.")
@@ -565,11 +519,9 @@ def launch_and_monitor_for_tuning_cli():
     print_info(f"Tuning: Launching & Monitoring for OT Level {current_tuning_attempt_level}")
     kcpp_success_event.clear(); kcpp_oom_event.clear(); kcpp_output_lines_shared.clear()
     last_approx_vram_used_kcpp_mb = None
+    level_of_last_monitored_run = current_tuning_attempt_level  # Capture the level for *this* specific run
 
-    global level_of_last_monitored_run
-    
     ot_string = koboldcpp_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
-    level_of_last_monitored_run = current_tuning_attempt_level  # Store the level used for this launch
     args_for_kcpp_list = koboldcpp_core.build_command(
         current_tuning_model_path_local, ot_string,
         current_tuning_model_analysis_local, current_tuning_session_base_args
@@ -584,35 +536,30 @@ def launch_and_monitor_for_tuning_cli():
     if error_msg or not kcpp_process_obj:
         print_error(f"Failed to launch KCPP for monitoring: {error_msg or 'Unknown error'}")
         koboldcpp_core.save_config_to_db(
-            DB_FILE, current_tuning_model_path, current_tuning_model_analysis_local, 
+            DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, 
             vram_at_decision_for_db, last_proposed_command_list_for_db,
-            level_of_last_monitored_run,  # Use the stored level
-            final_outcome_for_db, last_approx_vram_used_kcpp_mb
-    )
+            level_of_last_monitored_run, # Use the captured level
+            "LAUNCH_FAILED_SETUP_CLI", None
+        )
         return
 
     print_info(f"KoboldCpp process started (PID: {kcpp_process_obj.pid}). Monitoring output...")
     effective_args_for_port = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
     target_port_for_success = effective_args_for_port.get("--port", "5000")
-
-    live_display = None; progress_bar = None # Rich specific, keep as None if not used
+    
+    live_display = None; progress_bar = None
     
     kcpp_monitor_thread = threading.Thread(
         target=monitor_kcpp_output_thread_target_cli,
-        args=(kcpp_process_obj,                # process
-              kcpp_success_event,              # success_event
-              kcpp_oom_event,                  # oom_event
-              kcpp_output_lines_shared,        # output_lines_list
-              KOBOLD_SUCCESS_PATTERN,          # success_regex_str
-              OOM_ERROR_KEYWORDS,              # oom_keywords_list
-              target_port_for_success,         # target_port
-              live_display,                    # live_disp (optional)
-              progress_bar),                   # progress_disp (optional)
+        args=(kcpp_process_obj, kcpp_success_event, kcpp_oom_event, kcpp_output_lines_shared,
+              KOBOLD_SUCCESS_PATTERN, OOM_ERROR_KEYWORDS, target_port_for_success,
+              live_display, progress_bar),
         daemon=True
     )
     kcpp_monitor_thread.start()
     monitor_start_time = time.monotonic()
     
+    final_outcome_key = None
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), BarColumn(), TextColumn("{task.completed:.0f}s / {task.total:.0f}s"), console=console, transient=True) if dependencies['rich']['module'] else nullcontext() as rich_progress_live:
         if rich_progress_live:
             loading_task = rich_progress_live.add_task("KCPP Loading...", total=float(LOADING_TIMEOUT_SECONDS))
@@ -623,14 +570,10 @@ def launch_and_monitor_for_tuning_cli():
                 rich_progress_live.update(loading_task, completed=min(elapsed_time, float(LOADING_TIMEOUT_SECONDS)))
 
             process_exited = kcpp_process_obj.poll() is not None
-            final_outcome_key = None
-
-            if kcpp_success_event.is_set(): final_outcome_key = "SUCCESS_LOAD_DETECTED_CLI"
-            elif kcpp_oom_event.is_set(): final_outcome_key = "OOM_CRASH_DETECTED_CLI"
-            elif process_exited: final_outcome_key = "PREMATURE_EXIT_CLI"
-            elif elapsed_time > LOADING_TIMEOUT_SECONDS: final_outcome_key = "TIMEOUT_NO_SIGNAL_CLI"
-            
-            if final_outcome_key: break
+            if kcpp_success_event.is_set(): final_outcome_key = "SUCCESS_LOAD_DETECTED_CLI"; break
+            if kcpp_oom_event.is_set(): final_outcome_key = "OOM_CRASH_DETECTED_CLI"; break
+            if process_exited: final_outcome_key = "PREMATURE_EXIT_CLI"; break
+            if elapsed_time > LOADING_TIMEOUT_SECONDS: final_outcome_key = "TIMEOUT_NO_SIGNAL_CLI"; break
             time.sleep(0.25)
 
     print_info(f"Monitoring completed. Initial Outcome: {final_outcome_key}")
@@ -660,12 +603,14 @@ def launch_and_monitor_for_tuning_cli():
 
     koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
                                    vram_at_decision_for_db, last_proposed_command_list_for_db,
-                                   current_tuning_attempt_level, db_outcome_to_save, last_approx_vram_used_kcpp_mb)
-    # Removed automatic history display here.
+                                   level_of_last_monitored_run, # Use the captured level for DB
+                                   db_outcome_to_save, last_approx_vram_used_kcpp_mb)
     handle_post_monitoring_choices_cli(db_outcome_to_save)
+
 
 def handle_post_monitoring_choices_cli(outcome: str):
     global current_tuning_attempt_level, tuning_in_progress, kcpp_process_obj, last_launched_process_info
+    global level_of_last_monitored_run # Ensure access if needed for DB updates
 
     choices = {}
     default_choice = ""
@@ -696,19 +641,13 @@ def handle_post_monitoring_choices_cli(outcome: str):
         default_choice = "a"
     elif "OOM" in outcome or "CRASH" in outcome or "PREMATURE_EXIT" in outcome:
         print_error("KCPP failed to load properly (OOM/Crash/Premature Exit).")
-        choices = {
-            "c": "⚙️ Try More CPU & Continue Tuning",
-            "q": "↩️ Save & Return to Tuning Menu"
-        }
+        choices = { "c": "⚙️ Try More CPU & Continue Tuning", "q": "↩️ Save & Return to Tuning Menu"}
         default_choice = "c"
     elif "TIMEOUT" in outcome:
         print_warning("KCPP launch timed out.")
-        choices = {
-            "c": "⚙️ Try More CPU (Assume OOM & Continue Tuning)",
-            "q": "↩️ Save & Return to Tuning Menu"
-        }
+        choices = { "c": "⚙️ Try More CPU (Assume OOM & Continue Tuning)", "q": "↩️ Save & Return to Tuning Menu"}
         default_choice = "c"
-    else: # Generic success or other unhandled cases
+    else: 
         if kcpp_is_running:
             print_info("KCPP loaded (unknown VRAM status or generic success).")
             choices = {"u": "✅ Keep KCPP Running for Use", "q": "↩️ Stop KCPP, Save & Return to Tuning Menu"}
@@ -722,9 +661,9 @@ def handle_post_monitoring_choices_cli(outcome: str):
     user_action = prompt("Your choice?", choices=list(choices.keys()), default=default_choice).lower()
     
     new_db_outcome_suffix = ""
-    action_requires_kcpp_stop = True # Most actions will stop the monitored instance
+    action_requires_kcpp_stop = True
 
-    if user_action == 'u': # Accept & Use / Keep KCPP Running
+    if user_action == 'u': 
         if kcpp_is_running:
             print_info("Keeping current KoboldCpp instance running for use.")
             new_db_outcome_suffix = "_USER_ACCEPTED_AND_USED"
@@ -734,24 +673,21 @@ def handle_post_monitoring_choices_cli(outcome: str):
             
             effective_args_for_port = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
             port_to_use = effective_args_for_port.get("--port", "5000")
-
             if AUTO_OPEN_WEBUI: webbrowser.open(f"http://localhost:{port_to_use}")
             
-            session_ctrl_res = kcpp_control_loop_cli(port_to_use, is_monitored_instance=True)
-            tuning_in_progress = False # End tuning session
-             # Update DB before returning from control loop
             final_outcome_for_db_accepted = outcome + new_db_outcome_suffix
             koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
                                    vram_at_decision_for_db, last_proposed_command_list_for_db,
-                                   current_tuning_attempt_level, final_outcome_for_db_accepted, last_approx_vram_used_kcpp_mb)
-            if session_ctrl_res == "quit_script_leave_running": return # Special case to keep KCPP running and exit launcher
-            return # Return to main menu or exit script based on session_ctrl_res
+                                   level_of_last_monitored_run, final_outcome_for_db_accepted, last_approx_vram_used_kcpp_mb)
+            session_ctrl_res = kcpp_control_loop_cli(port_to_use, is_monitored_instance=True)
+            tuning_in_progress = False
+            if session_ctrl_res == "quit_script_leave_running": return "quit_script_leave_running"
+            return "new_gguf" # Default to new model after controlling instance
         else:
             print_warning("KCPP is not running, cannot accept and use. Returning to tuning menu.")
             new_db_outcome_suffix = "_ATTEMPTED_USE_BUT_NOT_RUNNING"
 
-
-    elif user_action == 'l': # Launch Anyway (Risky)
+    elif user_action == 'l': 
         if kcpp_is_running:
             print_info("Keeping current (risky) KoboldCpp instance running.")
             new_db_outcome_suffix = "_USER_KEPT_RISKY_RUNNING"
@@ -761,65 +697,63 @@ def handle_post_monitoring_choices_cli(outcome: str):
             effective_args_for_port = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
             port_to_use = effective_args_for_port.get("--port", "5000")
             if AUTO_OPEN_WEBUI: webbrowser.open(f"http://localhost:{port_to_use}")
-            session_ctrl_res = kcpp_control_loop_cli(port_to_use, is_monitored_instance=True)
-            tuning_in_progress = False
+
             final_outcome_for_db_risky = outcome + new_db_outcome_suffix
             koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
                                    vram_at_decision_for_db, last_proposed_command_list_for_db,
-                                   current_tuning_attempt_level, final_outcome_for_db_risky, last_approx_vram_used_kcpp_mb)
-            if session_ctrl_res == "quit_script_leave_running": return
-            return
-        else: # KCPP not running, so "Launch Anyway" means re-launch this config
+                                   level_of_last_monitored_run, final_outcome_for_db_risky, last_approx_vram_used_kcpp_mb)
+            session_ctrl_res = kcpp_control_loop_cli(port_to_use, is_monitored_instance=True)
+            tuning_in_progress = False
+            if session_ctrl_res == "quit_script_leave_running": return "quit_script_leave_running"
+            return "new_gguf"
+        else: 
             print_info("KCPP not running. Re-launching this configuration (risky)...")
             new_db_outcome_suffix = "_USER_RELAUNCHED_RISKY"
-            # Fall through to general KCPP stop (no-op) and then re-launch logic.
-            # Actually, this needs a direct launch.
             final_outcome_for_db_relaunch_risky = outcome + new_db_outcome_suffix
-            koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
-                                   vram_at_decision_for_db, last_proposed_command_list_for_db,
-                                   current_tuning_attempt_level, final_outcome_for_db_relaunch_risky, last_approx_vram_used_kcpp_mb)
-            launched_proc = launch_kobold_for_use_cli(last_proposed_command_list_for_db, final_outcome_for_db_relaunch_risky) # uses global gguf_file_global
+            # The command to relaunch is `last_proposed_command_list_for_db`
+            launched_proc = launch_kobold_for_use_cli(last_proposed_command_list_for_db, final_outcome_for_db_relaunch_risky)
             if launched_proc:
                 effective_args = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
                 port = effective_args.get("--port", "5000")
-                session_ctrl_res = kcpp_control_loop_cli(port) # Regular control loop
-                tuning_in_progress = False # End tuning after this.
-                return # Propagate control decision
+                session_ctrl_res = kcpp_control_loop_cli(port)
+                tuning_in_progress = False
+                if session_ctrl_res == "quit_script_leave_running": return "quit_script_leave_running"
+                return "new_gguf"
             else:
                 print_error("Risky re-launch failed. Returning to tuning menu.")
-                # Fall through to ensure KCPP is stopped and then continue tuning loop.
+                # DB update for the re-launch attempt failure is handled by launch_kobold_for_use_cli if it fails to start
 
-    # For all other actions, KCPP must be stopped if it was running from monitoring
     if kcpp_is_running and action_requires_kcpp_stop:
         print_info("Stopping current KoboldCpp instance...")
         koboldcpp_core.kill_process(kcpp_process_obj.pid, force=True)
     kcpp_process_obj = None
 
-    if user_action == 's': # Save as Good, Stop KCPP & Continue Tuning (Try More GPU)
+    if user_action == 's': 
         new_db_outcome_suffix = "_USER_SAVED_GOOD_MORE_GPU"
         if current_tuning_attempt_level > current_tuning_min_level: current_tuning_attempt_level -= 1
         else: print_warning("Already at Max GPU, cannot go further.")
-    elif user_action == 'g': # Stop KCPP & Try More GPU (This Session)
+    elif user_action == 'g': 
         new_db_outcome_suffix = "_USER_WANTS_MORE_GPU_NOW"
         if current_tuning_attempt_level > current_tuning_min_level: current_tuning_attempt_level -= 1
         else: print_warning("Already at Max GPU, cannot go further.")
-    elif user_action == 'c' or user_action == 'a': # Try More CPU or Auto-Adjust (More CPU)
+    elif user_action == 'c' or user_action == 'a': 
         if user_action == 'a': new_db_outcome_suffix = "_USER_ACCEPTED_AUTO_ADJUST_CPU"
         else: new_db_outcome_suffix = "_USER_TRIED_MORE_CPU_AFTER_FAIL" if "FAIL" in outcome.upper() or "OOM" in outcome.upper() or "TIMEOUT" in outcome.upper() else "_USER_WANTS_MORE_CPU_NOW"
         if current_tuning_attempt_level < current_tuning_max_level: current_tuning_attempt_level += 1
         else: print_warning("Already at Max CPU, cannot go further.")
-    elif user_action == 'q': # Save & Return to Tuning Menu
+    elif user_action == 'q': 
         new_db_outcome_suffix = "_USER_SAVED_RETURN_TUNING_MENU"
     
     final_outcome_for_db = outcome + new_db_outcome_suffix
     koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
                                    vram_at_decision_for_db, last_proposed_command_list_for_db,
-                                   current_tuning_attempt_level, # This should be the level *tested*, not the *next* level
+                                   level_of_last_monitored_run, # Save with the level that was *tested*
                                    final_outcome_for_db, last_approx_vram_used_kcpp_mb)
-    # Continue tuning loop (run_model_tuning_session_cli will loop)
+    # Implicitly continues tuning loop by returning from this function
 
-def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_success: str):
-    global last_launched_process_info
+def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_success: str, level_for_db_record: Optional[int] = None):
+    global last_launched_process_info, gguf_file_global, current_model_analysis_global
+
     if last_launched_process_info["process_obj"] and last_launched_process_info["process_obj"].poll() is None:
         print_info(f"Stopping previously launched KCPP (PID: {last_launched_process_info['pid']})...")
         koboldcpp_core.kill_process(last_launched_process_info["pid"])
@@ -828,40 +762,24 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
     print_info(f"Launching KoboldCpp for use...")
     vram_before_launch, _, _, _ = koboldcpp_core.get_available_vram_mb()
     
-    # Determine OT level from command_list for DB logging if possible
-    parsed_args_for_db = koboldcpp_core.args_list_to_dict(command_list_to_run)
-    ot_level_for_db = 0 # Default if not found or not in tuning
-    # Attempt to reverse-engineer attempt_level if --overridetensors is present.
-    # This is tricky and imperfect. A simpler approach for non-tuning launches is to record a placeholder.
-    # For now, we'll use a simple approach.
-    # If this launch_for_use_cli is called from tuning, current_tuning_attempt_level should be used.
-    # If called directly (e.g. "launch best remembered"), it's harder.
-    # Let's assume if tuning_in_progress, that level is relevant. Otherwise, it's a direct launch.
-    
-    # If current_tuning_attempt_level is available (i.e., we are likely in a post-tuning launch_for_use context), use it.
-    # Otherwise, for truly direct launches, the concept of "attempt_level" is less defined.
-    # We can try to extract it if this function is called with a command derived from a historical record.
-    # The `db_outcome_on_success` might hint if it's from "best remembered".
-    
-    level_to_log = current_tuning_attempt_level if tuning_in_progress else 0 # Placeholder for direct/remembered
-
-    # A slightly better way for "best remembered":
-    if "BEST_REMEMBERED" in db_outcome_on_success.upper():
-        # Try to get level from a known historical config if this is a "best remembered" launch
-        # This is a bit circular if we don't pass the level in.
-        # For now, stick to `level_to_log`.
-        pass
-
+    # Determine level to log. If provided, use it. Otherwise, use placeholder.
+    final_level_for_db = level_for_db_record if level_for_db_record is not None else \
+                         (current_tuning_attempt_level if tuning_in_progress else 0)
 
     koboldcpp_core.save_config_to_db(DB_FILE, gguf_file_global, current_model_analysis_global,
                                    vram_before_launch, command_list_to_run,
-                                   level_to_log, 
-                                   db_outcome_on_success, None)
+                                   final_level_for_db, 
+                                   db_outcome_on_success, None) # VRAM used unknown before launch
 
     process, error_msg = koboldcpp_core.launch_process(command_list_to_run, capture_output=False, new_console=True)
 
     if error_msg or not process:
         print_error(f"Failed to launch KoboldCPP: {error_msg or 'Unknown error'}")
+        # Log failure if it couldn't even start
+        koboldcpp_core.save_config_to_db(DB_FILE, gguf_file_global, current_model_analysis_global,
+                                   vram_before_launch, command_list_to_run,
+                                   final_level_for_db, 
+                                   "LAUNCH_FOR_USE_FAILED_CLI", None)
         return None
     else:
         print_success(f"KoboldCpp launched in new console (PID: {process.pid}).")
@@ -881,8 +799,7 @@ def kcpp_control_loop_cli(port_to_use: str, is_monitored_instance: bool = False)
     global last_launched_process_info, kcpp_process_obj
 
     process_to_control = kcpp_process_obj if is_monitored_instance else last_launched_process_info.get("process_obj")
-    pid_to_control = process_to_control.pid if process_to_control else last_launched_process_info.get("pid")
-
+    pid_to_control = process_to_control.pid if process_to_control and hasattr(process_to_control, 'pid') else last_launched_process_info.get("pid")
 
     while True:
         if process_to_control and process_to_control.poll() is not None:
@@ -901,14 +818,16 @@ def kcpp_control_loop_cli(port_to_use: str, is_monitored_instance: bool = False)
         choice_run = prompt("KCPP Control", choices=['s', 'q', 'e', 'w'], default='s').lower().strip()
 
         if choice_run == 's':
-            print_info(f"Stopping KCPP{active_pid_display}...")
-            if process_to_control: koboldcpp_core.kill_process(pid_to_control)
+            if process_to_control and pid_to_control:
+                print_info(f"Stopping KCPP (PID: {pid_to_control})...")
+                koboldcpp_core.kill_process(pid_to_control)
             if is_monitored_instance: kcpp_process_obj = None
             else: last_launched_process_info = {"pid": None, "process_obj": None, "command_list": []}
             return "new_gguf"
         elif choice_run == 'q':
-            print_info(f"Stopping KCPP{active_pid_display} and quitting launcher...")
-            if process_to_control: koboldcpp_core.kill_process(pid_to_control)
+            if process_to_control and pid_to_control:
+                print_info(f"Stopping KCPP (PID: {pid_to_control}) and quitting launcher...")
+                koboldcpp_core.kill_process(pid_to_control)
             return "quit_script"
         elif choice_run == 'e':
             print_info(f"Exiting launcher. KCPP{active_pid_display} will be left running.")
@@ -922,7 +841,7 @@ def kcpp_control_loop_cli(port_to_use: str, is_monitored_instance: bool = False)
 def run_model_tuning_session_cli():
     global tuning_in_progress, current_tuning_attempt_level, current_tuning_min_level, current_tuning_max_level
     global current_tuning_session_base_args, current_tuning_model_path_local, current_tuning_model_analysis_local
-    global gguf_file_global, current_model_analysis_global
+    global gguf_file_global, current_model_analysis_global, level_of_last_monitored_run
 
     if not gguf_file_global or not current_model_analysis_global.get('filepath'):
         print_error("No model selected or analyzed. Please select a model first.")
@@ -931,6 +850,7 @@ def run_model_tuning_session_cli():
     tuning_in_progress = True
     current_tuning_model_path_local = gguf_file_global
     current_tuning_model_analysis_local = current_model_analysis_global.copy()
+    # Initialize session args from effective global/model-specific defaults
     current_tuning_session_base_args = get_effective_session_args(current_tuning_model_path_local, {})
 
     print_title(f"Starting Auto-Tuning Session for: {os.path.basename(current_tuning_model_path_local)}")
@@ -954,6 +874,7 @@ def run_model_tuning_session_cli():
     if best_hist_config and "attempt_level" in best_hist_config:
         print_info(f"Found historical config. Level: {best_hist_config['attempt_level']}, Outcome: {best_hist_config['outcome']}")
         hist_level, hist_outcome = best_hist_config['attempt_level'], best_hist_config.get('outcome', "")
+        # Adjust initial level based on historical outcome
         if hist_outcome.startswith("SUCCESS_LOAD_VRAM_OK") or hist_outcome.endswith("_USER_SAVED_GOOD_MORE_GPU"):
             initial_heuristic_level = max(current_tuning_min_level, hist_level - 1)
         elif hist_outcome.endswith("_USER_ACCEPTED_AUTO_ADJUST_CPU") or hist_outcome.endswith("_USER_TRIED_MORE_CPU_AFTER_FAIL"):
@@ -964,19 +885,19 @@ def run_model_tuning_session_cli():
         if remembered_args_list:
             remembered_args_dict = koboldcpp_core.args_list_to_dict(remembered_args_list)
             remembered_args_dict.pop("--model", None); remembered_args_dict.pop("--overridetensors", None)
-            current_tuning_session_base_args.update(remembered_args_dict)
+            current_tuning_session_base_args.update(remembered_args_dict) # Apply remembered args
             print_info(f"Applied remembered arguments to current session base. OT Level adjusted to: {initial_heuristic_level}")
     else:
         print_info(f"No suitable historical config. Starting with heuristic OT Level: {initial_heuristic_level}")
+    
     current_tuning_attempt_level = max(current_tuning_min_level, min(initial_heuristic_level, current_tuning_max_level))
+    level_of_last_monitored_run = current_tuning_attempt_level # Initialize
 
     while tuning_in_progress:
         print("\n" + "=" * 70)
         current_tuning_attempt_level = max(current_tuning_min_level, min(current_tuning_attempt_level, current_tuning_max_level))
         ot_string = koboldcpp_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
         description = koboldcpp_core.get_offload_description(current_tuning_model_analysis_local, current_tuning_attempt_level, ot_string)
-        
-        # Get GPU layers info
         gpu_layers = koboldcpp_core.get_gpu_layers_for_level(current_tuning_model_analysis_local, current_tuning_attempt_level)
         total_layers = current_tuning_model_analysis_local.get('num_layers', 32)
         
@@ -1007,15 +928,15 @@ def run_model_tuning_session_cli():
         user_choice = prompt("Your choice", choices=['l','s','g','c','e','n','h','q'], default='l').lower().strip()
 
         if user_choice == 'l':
-            launch_and_monitor_for_tuning_cli()
-            if not tuning_in_progress: # Tuning might have ended due to user accepting a launch
-                # Check if KCPP is running and decide action, or simply return to main menu
-                if last_launched_process_info["process_obj"] and last_launched_process_info["process_obj"].poll() is None:
-                    return "quit_script_leave_running" 
-                return "new_gguf"
+            session_action = launch_and_monitor_for_tuning_cli() # This function now calls handle_post_monitoring_choices_cli
+            if session_action == "quit_script_leave_running": # Propagate quit signal if KCPP left running
+                tuning_in_progress = False; return "quit_script_leave_running"
+            if not tuning_in_progress: # Tuning might have ended
+                return "new_gguf" 
         elif user_choice == 's':
             print_info("Skipping further tuning, launching current configuration directly...")
-            launched_proc = launch_kobold_for_use_cli(display_command_list, "SUCCESS_USER_DIRECT_LAUNCH_CLI")
+            # Pass current_tuning_attempt_level for DB logging
+            launched_proc = launch_kobold_for_use_cli(display_command_list, "SUCCESS_USER_DIRECT_LAUNCH_CLI", level_for_db_record=current_tuning_attempt_level)
             if launched_proc:
                 effective_args = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
                 port = effective_args.get("--port", "5000")
@@ -1031,14 +952,14 @@ def run_model_tuning_session_cli():
         elif user_choice == 'e':
             updated_session_args, perm_changed = edit_current_args_interactive_cli(current_tuning_model_path_local, current_tuning_session_base_args)
             if updated_session_args is not None: current_tuning_session_base_args = updated_session_args
-            if perm_changed : # Re-fetch effective args if permanent ones changed
-                 current_tuning_session_base_args = get_effective_session_args(current_tuning_model_path_local, {}) # Start with fresh session args
+            if perm_changed :
+                 current_tuning_session_base_args = get_effective_session_args(current_tuning_model_path_local, {})
                  print_info("Permanent arguments changed. Session overrides reset for this model.")
         elif user_choice == 'n':
             tuning_in_progress = False; return "new_gguf"
-        elif user_choice == 'h': view_db_history_cli(current_tuning_model_path_local) # Filtered history
+        elif user_choice == 'h': view_db_history_cli(current_tuning_model_path_local)
         elif user_choice == 'q':
-            tuning_in_progress = False; return "new_gguf" # Correctly go back to model selection stage
+            tuning_in_progress = False; return "new_gguf"
         else: print_error("Invalid input.")
     tuning_in_progress = False
     return "new_gguf"
@@ -1052,7 +973,7 @@ def main_cli():
     core_init_results = koboldcpp_core.initialize_launcher()
     CONFIG = core_init_results["config"]
     KOBOLDCPP_EXECUTABLE = CONFIG["koboldcpp_executable"]
-    DB_FILE = os.path.abspath(CONFIG["db_file"]) # Ensure DB_FILE is absolute after core init
+    DB_FILE = os.path.abspath(CONFIG["db_file"])
     DEFAULT_GGUF_DIR = CONFIG.get("default_gguf_dir", "")
     AUTO_OPEN_WEBUI = CONFIG.get("auto_open_webui", True)
     VRAM_SAFETY_BUFFER_MB = CONFIG.get("vram_safety_buffer_mb", 768)
@@ -1091,10 +1012,8 @@ def main_cli():
     
     while True:
         select_result = select_gguf_file_cli()
-        if select_result is None: # User chose to quit launcher entirely
-            break 
-        if select_result == "main_menu": # User cancelled file selection, loop back to main menu
-            continue
+        if select_result is None: break 
+        if select_result == "main_menu": continue
 
         gguf_file_global = select_result
         current_model_analysis_global = koboldcpp_core.analyze_filename(gguf_file_global)
@@ -1115,9 +1034,9 @@ if __name__ == "__main__":
         try:
             koboldcpp_core.pynvml.nvmlInit()
             pynvml_globally_initialized_cli = True; print_info("PyNVML initialized.")
-        except koboldcpp_core.pynvml.NVMLError as e:
-            print_warning(f"PyNVML init failed: {e}. GPU VRAM info might be unavailable for NVIDIA.")
-            koboldcpp_core.pynvml_available = False
+        except Exception as e_nvml_init: # Broader exception for nvmlInit
+            print_warning(f"PyNVML init failed: {e_nvml_init}. GPU VRAM info might be unavailable for NVIDIA.")
+            koboldcpp_core.pynvml_available = False # Mark as unavailable if init fails
     try:
         main_cli()
     except KeyboardInterrupt: print_warning("\nLauncher terminated by user (Ctrl+C).")
@@ -1126,18 +1045,18 @@ if __name__ == "__main__":
     finally:
         print_info("Exiting. Cleaning up any lingering KoboldCpp process launched by this session...")
         if last_launched_process_info.get("process_obj") and last_launched_process_info["process_obj"].poll() is None:
-            print_info(f"Stopping last launched KCPP process (PID: {last_launched_process_info['pid']})...")
-            koboldcpp_core.kill_process(last_launched_process_info["pid"], force=True)
+            if last_launched_process_info.get("pid"): # Check if pid exists
+                print_info(f"Stopping last launched KCPP process (PID: {last_launched_process_info['pid']})...")
+                koboldcpp_core.kill_process(last_launched_process_info["pid"], force=True)
         
-        if KOBOLDCPP_EXECUTABLE: # Ensure KOBOLDCPP_EXECUTABLE is defined
+        if KOBOLDCPP_EXECUTABLE: 
             exe_base = os.path.basename(KOBOLDCPP_EXECUTABLE)
-            py_script_name = exe_base if exe_base.lower().endswith(".py") else "koboldcpp.py"
-            print_info(f"Performing cleanup sweep for processes like '{exe_base}' or python scripts like '{py_script_name}'...")
+            print_info(f"Performing cleanup sweep for processes like '{exe_base}'...")
             koboldcpp_core.kill_processes_by_name(exe_base)
-            if exe_base.lower().endswith(".py"):
+            if exe_base.lower().endswith(".py"): # Also check for python running this script
                  koboldcpp_core.kill_processes_by_name("python", cmdline_substr_filter=exe_base)
 
-        if pynvml_globally_initialized_cli and koboldcpp_core.pynvml_available:
+        if pynvml_globally_initialized_cli and koboldcpp_core.pynvml_available: # Check availability again before shutdown
             try: koboldcpp_core.pynvml.nvmlShutdown(); print_info("PyNVML shut down.")
             except Exception as e_nvml_shutdown: print_warning(f"Error during PyNVML shutdown: {e_nvml_shutdown}")
         print_info("Launcher exited.")
