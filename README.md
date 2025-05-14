@@ -165,12 +165,23 @@ This project is licensed under the MIT License - see the LICENSE.md file for det
 
 ## 📸 Screenshots
 
-*Add your screenshots here to show the launcher in action*
+CLI Example 1
+![CLI Example 1](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/cli1.png)
 
-To add screenshots:
-1. Create a `screenshots` folder
-2. Save images of the GUI and CLI in action
-3. Update the image paths in this README
+CLI Example 2
+![CLI Example 2](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/cli2.png)
+
+GUI Example 1
+![GUI Example 1](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI1.png)
+
+GUI Example 2
+![GUI Example 2](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI2.png)
+
+GUI Example 3
+![GUI Example 3](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI3.png)
+
+GUI Example 4
+![GUI Example 4](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI4.png)
 
 ## 🤝 Contributing
 
