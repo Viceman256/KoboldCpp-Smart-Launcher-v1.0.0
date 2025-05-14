@@ -68,10 +68,13 @@ DEFAULT_CONFIG_TEMPLATE = {
         "--flashattention": True,
         "--port": "5000",
         "--defaultgenamt": "2048",
-        "--gpulayers": "auto",  # Added for consistency
+        "--gpulayers": "auto",
         "--quantkv": "auto",
-        "--blasbatchsize": "auto"
-        
+        "--blasbatchsize": "auto",
+        # New args
+        "--nommap": False,
+        "--lowvram": False,
+        "--nblas": "auto" # "auto" will mean omit the flag for KCPP to use its default
     },
     "vram_safety_buffer_mb": 768,
     "min_vram_free_after_load_success_mb": 512,
@@ -148,18 +151,42 @@ def load_config():
             for key, default_value in DEFAULT_CONFIG_TEMPLATE.items():
                 if key in user_config:
                     if isinstance(default_value, dict) and isinstance(user_config[key], dict):
-                        merged_sub_dict = default_value.copy()
-                        merged_sub_dict.update(user_config[key])
-                        config_data[key] = merged_sub_dict
+                        # Deep merge for 'default_args' and 'gpu_detection'
+                        if key == "default_args" or key == "gpu_detection":
+                            merged_sub_dict = default_value.copy()
+                            merged_sub_dict.update(user_config[key])
+                            config_data[key] = merged_sub_dict
+                        # For other dicts, user_config overwrites (original behavior)
+                        else:
+                             config_data[key] = user_config[key]
                     else:
                         config_data[key] = user_config[key]
-                # elif key not in config_data: # This case should not be strictly necessary due to .copy()
-                #     config_data[key] = default_value
+                # If key from template is not in user_config, the default from .copy() is already there.
+            
+            # Ensure all keys from DEFAULT_CONFIG_TEMPLATE["default_args"] are present in config_data["default_args"]
+            # This handles adding new default arguments to existing user configs.
+            if "default_args" in config_data:
+                for arg_key, arg_default_val in DEFAULT_CONFIG_TEMPLATE["default_args"].items():
+                    if arg_key not in config_data["default_args"]:
+                        config_data["default_args"][arg_key] = arg_default_val
+            else: # If "default_args" somehow missing entirely, restore it
+                config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+
             return config_data, True, f"Loaded configuration from {CONFIG_FILE}"
         except Exception as e:
-            return config_data, False, f"Error loading {CONFIG_FILE}: {e}. Using defaults."
+            # If loading fails, still try to ensure default_args structure is sound
+            if "default_args" not in config_data:
+                 config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+            else:
+                for arg_key, arg_default_val in DEFAULT_CONFIG_TEMPLATE["default_args"].items():
+                    if arg_key not in config_data["default_args"]:
+                        config_data["default_args"][arg_key] = arg_default_val
+            return config_data, False, f"Error loading {CONFIG_FILE}: {e}. Using defaults and ensuring all default_args keys."
     else:
+        # No config file, ensure default_args is a fresh copy
+        config_data["default_args"] = DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
         return config_data, False, f"No config file found at {CONFIG_FILE}. Using defaults."
+
 
 # --- Database Functions ---
 def init_db(db_file):
@@ -919,31 +946,35 @@ def args_list_to_dict(args_list):
                 args_dict[arg] = args_list[i+1]
                 i += 2
             else:
-                args_dict[arg] = True
+                args_dict[arg] = True # For boolean flags like --usecublas
                 i += 1
-        else:
+        else: # Should not happen for well-formed args but handle gracefully
             i += 1
     return args_dict
 
 def args_dict_to_list(args_dict):
     cmd_list_part = []
-    if "--model" in args_dict:
+    if "--model" in args_dict: # Ensure model is first if present
         cmd_list_part.extend(["--model", str(args_dict["--model"])])
 
-    preferred_order = ["--threads", "--port", "--contextsize", "--promptlimit", "--gpulayers",
-                       "--nogpulayers", "--usecublas", "--flashattention", "--quantkv",
-                       "--blasbatchsize", "--overridetensors", "--defaultgenamt"]
-    processed_keys = set(["--model"])
+    preferred_order = [
+        "--threads", "--nblas", "--port", "--contextsize", "--promptlimit", 
+        "--gpulayers", "--nogpulayers", "--usecublas", "--flashattention", 
+        "--nommap", "--lowvram", # Added new boolean flags
+        "--quantkv", "--blasbatchsize", "--overridetensors", "--defaultgenamt"
+    ]
+    processed_keys = set(["--model"]) # Start with --model as processed
 
     for key in preferred_order:
         if key in args_dict and key not in processed_keys:
             value = args_dict[key]
-            if value is True:
+            if value is True: # For boolean flags that are enabled
                 cmd_list_part.append(key)
-            elif value is not False:  # Handles strings, numbers, etc.
+            elif value is not False:  # Handles strings, numbers, etc., but skips False booleans
                 cmd_list_part.extend([key, str(value)])
             processed_keys.add(key)
 
+    # Add any remaining arguments not in preferred_order, sorted for consistency
     for key in sorted([k for k in args_dict if k not in processed_keys]):
         value = args_dict[key]
         if value is True:
@@ -1010,82 +1041,79 @@ def build_command(model_path, override_tensor_str, model_analysis, session_base_
                     logical_cores = psutil.cpu_count(logical=True) or 2
                     current_cmd_args_dict["--threads"] = str(max(1, logical_cores // 2))
             except:  # noqa: E722
-                current_cmd_args_dict["--threads"] = "4"
+                current_cmd_args_dict["--threads"] = "4" # Fallback if psutil fails
         else:
-            current_cmd_args_dict["--threads"] = "4"
+            current_cmd_args_dict["--threads"] = "4" # Fallback if psutil not available
+
+    # Handle nblas parameter
+    nblas_val = current_cmd_args_dict.get("--nblas")
+    if nblas_val is None or (isinstance(nblas_val, str) and nblas_val.lower() == 'auto'):
+        # If 'auto' or None, remove the flag so KoboldCpp uses its internal default
+        if "--nblas" in current_cmd_args_dict:
+            del current_cmd_args_dict["--nblas"]
+    # If it's a specific number (as string), it will be kept.
 
     # Handle GPU layers parameter based on offload level
     if override_tensor_str and override_tensor_str != "FAILURE_MAX_ATTEMPTS":
         current_cmd_args_dict["--overridetensors"] = override_tensor_str
-        
-        # Get attempt level from the overridetensors string
         attempt_level = get_level_from_overridetensors(override_tensor_str, model_analysis)
-        
-        # Only update gpulayers if set to auto or high value
         gpulayers_val = current_cmd_args_dict.get("--gpulayers")
         if gpulayers_val is None or \
            (isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['auto', '999']):
-            # Calculate appropriate gpulayers based on the level
             optimal_layers = get_gpu_layers_for_level(model_analysis, attempt_level)
             current_cmd_args_dict["--gpulayers"] = str(optimal_layers)
-        else:  
-            # If gpulayers is explicitly set but not high, respect that setting
-            current_gl = current_cmd_args_dict.get("--gpulayers")
-            if current_gl is None or \
-               (isinstance(current_gl, str) and current_gl.lower() not in ['off', '0'] and
-               (not current_gl.isdigit() or (current_gl.isdigit() and int(current_gl) < 999))):
-                current_cmd_args_dict["--gpulayers"] = "999"
-    else:
+        # else: respect manually set gpulayers not matching 'auto' or '999'
+    else: # No override_tensor_str or max attempts
         if "--overridetensors" in current_cmd_args_dict:
             del current_cmd_args_dict["--overridetensors"]
+        # If gpulayers was set to 999 due to OT, revert to original session base if not 999
         if current_cmd_args_dict.get("--gpulayers") == "999" and session_base_args_dict.get("--gpulayers") != "999":
             original_gl = session_base_args_dict.get("--gpulayers")
-            if original_gl is not None and str(original_gl).lower() not in ['off', '0']:
+            if original_gl is not None and str(original_gl).lower() not in ['off', '0', 'auto']:
                 current_cmd_args_dict["--gpulayers"] = str(original_gl)
-            elif "--gpulayers" in current_cmd_args_dict:
-                del current_cmd_args_dict["--gpulayers"]
+            elif original_gl is None or str(original_gl).lower() == 'auto': # If original was auto or None
+                 if "--gpulayers" in current_cmd_args_dict: # Keep auto if original was auto
+                    current_cmd_args_dict["--gpulayers"] = "auto" # Or remove if it became '999' from None
+                 else: pass # If it was None and became 999, removing it might not be intended if user explicitly wants 999.
+            elif str(original_gl).lower() in ['off', '0']: # If original was off/0
+                current_cmd_args_dict["--gpulayers"] = str(original_gl)
+
 
     # Handle gpulayers and nogpulayers flags
     gpulayers_val = current_cmd_args_dict.get("--gpulayers")
     if isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['off', '0']:
-        if "--gpulayers" in current_cmd_args_dict:
-            del current_cmd_args_dict["--gpulayers"]
+        if "--gpulayers" in current_cmd_args_dict: del current_cmd_args_dict["--gpulayers"]
         current_cmd_args_dict["--nogpulayers"] = True
-    elif "--nogpulayers" in current_cmd_args_dict and not (isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['off', '0']):
-        del current_cmd_args_dict["--nogpulayers"]
+    elif "--nogpulayers" in current_cmd_args_dict: # Ensure nogpulayers is removed if gpulayers is active
+        if not (isinstance(gpulayers_val, str) and gpulayers_val.lower() in ['off', '0']):
+            del current_cmd_args_dict["--nogpulayers"]
 
     # Handle quantkv parameter
     quantkv_val = current_cmd_args_dict.get("--quantkv")
     if quantkv_val is None or (isinstance(quantkv_val, str) and quantkv_val.lower() == 'auto'):
-        if "--quantkv" in current_cmd_args_dict:
-            del current_cmd_args_dict["--quantkv"]
+        if "--quantkv" in current_cmd_args_dict: del current_cmd_args_dict["--quantkv"] # Remove for auto logic
         quant_upper = model_analysis.get('quant', 'unknown').upper()
         model_size_b = model_analysis.get('size_b', 0)
         if any(q_check in quant_upper for q_check in ['Q5', 'Q6', 'Q8', 'F16', 'BF16', 'K_M', 'K_L', 'K_XL']) or \
            'XL' in quant_upper or (isinstance(model_size_b, (int, float)) and model_size_b >= 30):
-            current_cmd_args_dict["--quantkv"] = "1"
+            current_cmd_args_dict["--quantkv"] = "1" # Default to Q8_0 for these cases
     elif isinstance(quantkv_val, str) and quantkv_val.lower() == 'off':
-        if "--quantkv" in current_cmd_args_dict:
-            del current_cmd_args_dict["--quantkv"]
+        if "--quantkv" in current_cmd_args_dict: del current_cmd_args_dict["--quantkv"] # Treat 'off' as omitting the flag
 
     # Handle blasbatchsize parameter
     blasbatchsize_val = current_cmd_args_dict.get("--blasbatchsize")
     if blasbatchsize_val is None or (isinstance(blasbatchsize_val, str) and blasbatchsize_val.lower() == 'auto'):
-        if "--blasbatchsize" in current_cmd_args_dict:
-            del current_cmd_args_dict["--blasbatchsize"]
+        if "--blasbatchsize" in current_cmd_args_dict: del current_cmd_args_dict["--blasbatchsize"] # Remove for auto logic
         model_size_b = model_analysis.get('size_b', 0)
-        if model_analysis.get('is_moe', False):
-            current_cmd_args_dict["--blasbatchsize"] = "128"
-        elif isinstance(model_size_b, (int, float)) and model_size_b > 20:
-            current_cmd_args_dict["--blasbatchsize"] = "256"
-        else:
-            current_cmd_args_dict["--blasbatchsize"] = "512"
+        if model_analysis.get('is_moe', False): current_cmd_args_dict["--blasbatchsize"] = "128"
+        elif isinstance(model_size_b, (int, float)) and model_size_b > 20: current_cmd_args_dict["--blasbatchsize"] = "256"
+        else: current_cmd_args_dict["--blasbatchsize"] = "512"
     elif isinstance(blasbatchsize_val, str) and blasbatchsize_val.lower() == 'off':
-        if "--blasbatchsize" in current_cmd_args_dict:
-            del current_cmd_args_dict["--blasbatchsize"]
+        if "--blasbatchsize" in current_cmd_args_dict: del current_cmd_args_dict["--blasbatchsize"] # Treat 'off' as omitting
 
-    # Handle boolean flags
-    for flag in ["--usecublas", "--flashattention"]:
+    # Handle boolean flags that should be omitted if False
+    boolean_flags_to_manage = ["--usecublas", "--flashattention", "--nommap", "--lowvram"]
+    for flag in boolean_flags_to_manage:
         if flag in current_cmd_args_dict and current_cmd_args_dict[flag] is False:
             del current_cmd_args_dict[flag]
     
@@ -1125,7 +1153,7 @@ def kill_process(pid, force=True):
     except Exception as e:
         return False, f"Error killing process {pid}: {e}"
 
-def kill_processes_by_name(process_name_pattern):
+def kill_processes_by_name(process_name_pattern, cmdline_substr_filter=None):
     if not psutil_available:
         return False, "psutil not available for process scan."
     killed_any, results = False, []
@@ -1134,10 +1162,20 @@ def kill_processes_by_name(process_name_pattern):
             try:
                 proc_name = proc.info.get('name', '').lower()
                 proc_exe = (proc.info.get('exe', '') or '').lower()
-                proc_cmdline_str = ' '.join(proc.info.get('cmdline', [])).lower()
+                proc_cmdline_list = proc.info.get('cmdline', [])
+                proc_cmdline_str = ' '.join(proc_cmdline_list).lower()
 
                 target = process_name_pattern.lower()
+                match_found = False
                 if target in proc_name or target in proc_exe or target in proc_cmdline_str:
+                    if cmdline_substr_filter:
+                        # If filter provided, check if the filter string is in any of the cmdline arguments
+                        if any(cmdline_substr_filter.lower() in arg.lower() for arg in proc_cmdline_list):
+                            match_found = True
+                    else: # No cmdline filter, name/exe match is enough
+                        match_found = True
+                
+                if match_found:
                     success, message = kill_process(proc.pid)  # Always force kill in sweep
                     if success:
                         killed_any = True
@@ -1148,9 +1186,9 @@ def kill_processes_by_name(process_name_pattern):
         return False, f"Error scanning processes: {e}"
 
     if killed_any:
-        return True, f"Sweep for '{process_name_pattern}': " + "; ".join(results)
+        return True, f"Sweep for '{process_name_pattern}' (filter: '{cmdline_substr_filter}'): " + "; ".join(results)
     else:
-        return False, f"No processes matching '{process_name_pattern}' found or killed by sweep."
+        return False, f"No processes matching '{process_name_pattern}' (filter: '{cmdline_substr_filter}') found or killed by sweep."
 
 
 # --- Launch and Monitor Functions ---
@@ -1203,6 +1241,9 @@ def initialize_launcher():
             config["default_args"]["--threads"] = "4"  # Fallback
     elif config["default_args"].get("--threads") == "auto":  # psutil not available
         config["default_args"]["--threads"] = "4"
+
+    # Similar logic for --nblas if 'auto' but KoboldCpp handles its own 'auto' for this
+    # So no explicit psutil logic needed here for nblas, just ensure 'auto' is a valid string.
 
     return {
         "initialized": config_loaded and db_success,
