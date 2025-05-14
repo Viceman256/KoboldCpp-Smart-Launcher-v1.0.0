@@ -61,15 +61,23 @@ python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashat
 
 *Result: 52% speed improvement with the same VRAM usage!*
 
-### Example 4: Qwen3-235B MoE on 48GB VRAM (RTX 4090)
+### Example 4: Qwen3-235B MoE on Dual Xeon with 60GB VRAM
+
+**Traditional Layer Offloading:**
+```bash
+# Standard approach
+python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95
+```
+`Tokens per second: 2.9 t/s`
 
 **With Smart Tensor Offloading:**
 ```bash
-python koboldcpp.py --model Qwen3-235B-IQ3_M.gguf --contextsize 32768 --flashattention --gpulayers 99 --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
+# Using tensor-specific offloading
+python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95 --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
 ```
-`Tokens per second: 7.6 t/s`
+`Tokens per second: 4.2 t/s`
 
-*Result: Enables running a massive 235B model that otherwise wouldn't fit in 48GB VRAM!*
+*Result: 45% speed improvement while maintaining all 95 layers on GPU!*
 
 ## 📋 Features
 
