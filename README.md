@@ -3,7 +3,7 @@ KoboldCpp Smart Launcher with GPU Layer and Tensor Override Tuning
 
 A user-friendly toolkit for efficiently running KoboldCpp with optimized tensor offload strategies. Available in both GUI and CLI versions, this launcher intelligently manages VRAM usage to maximize performance on consumer GPUs.
 
-![KoboldCpp Smart Launcher GUI](screenshots/launcher_gui.png)
+![KoboldCpp Smart Launcher GUI](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI1.png)
 
 ## 🚀 Performance Examples
 
