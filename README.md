@@ -1,11 +1,10 @@
-# KoboldCpp-Smart-Launcher-v1.0.0
-KoboldCpp Smart Launcher with GPU Layer and Tensor Override Tuning
+# TensorTune v1.0.0
 
-A user-friendly toolkit for efficiently running KoboldCpp with optimized tensor offload strategies. Available in both GUI and CLI versions, this launcher intelligently manages VRAM usage to maximize performance on consumer GPUs.
+TensorTune is a user-friendly toolkit for efficiently running KoboldCpp, intelligently managing VRAM usage through optimized tensor offload strategies to maximize performance on consumer GPUs. Available in both GUI and CLI versions.
 
-![KoboldCpp Smart Launcher GUI](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI1.png)
+![TensorTune GUI](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI1.png) 
 
-## 🚀 Performance Examples
+## 🚀 Performance Examples with TensorTune
 
 Here are some real-world examples of performance improvements using tensor offloading:
 
@@ -14,213 +13,325 @@ Here are some real-world examples of performance improvements using tensor offlo
 **Traditional Layer Offloading:**
 ```bash
 python koboldcpp.py --threads 6 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 59 --quantkv 1
-```
-`Tokens per second: 3.95 t/s`
 
-**With Smart Tensor Offloading:**
-```bash
+
+Tokens per second: 3.95 t/s
+
+With TensorTune's Smart Tensor Offloading:
+
+      
 python koboldcpp.py --threads 10 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 65 --quantkv 1 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU"
-```
-`Tokens per second: 10.61 t/s`
 
-*Result: 168% speed improvement while using the same amount of VRAM!*
 
-### Example 2: Qwen3-30B A3B on RTX 4060 Ti (16GB)
+Tokens per second: 10.61 t/s
 
-**Traditional Layer Offloading:**
-```bash
+Result: 168% speed improvement while using the same amount of VRAM!
+Example 2: Qwen3-30B A3B on RTX 4060 Ti (16GB)
+
+Traditional Layer Offloading:
+
+      
 # Offloading 30 layers
 python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 30
-```
-`Tokens per second: 10 t/s`
 
-**With Smart Tensor Offloading:**
-```bash
+
+Tokens per second: 10 t/s
+
+With TensorTune's Smart Tensor Offloading:
+
+      
 # All layers on GPU with tensor offloading
 python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 99 --overridetensors "blk\.([0-9]*[02468])\.ffn_.*_exps\.=CPU"
-```
-`Tokens per second: 15 t/s`
 
-*Result: 50% speed improvement with better model quality!*
 
-### Example 3: Gemma3-27B on 16GB VRAM GPU 
+Tokens per second: 15 t/s
 
-**Traditional Layer Offloading:**
-```bash
+Result: 50% speed improvement with better model quality!
+Example 3: Gemma3-27B on 16GB VRAM GPU
+
+Traditional Layer Offloading:
+
+      
 # Baseline with 46 layers offloaded
 python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 46
-```
-`Tokens per second: 6.86 t/s`
 
-**With Smart Tensor Offloading:**
-```bash
+
+Tokens per second: 6.86 t/s
+
+With TensorTune's Smart Tensor Offloading:
+
+      
 # All layers on GPU with selective tensor offloading
 python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 99 --overridetensors "\.(5[3-9]|6[0-3])\.(ffn_*)=CPU"
-```
-`Tokens per second: 10.4 t/s`
 
-*Result: 52% speed improvement with the same VRAM usage!*
 
-### Example 4: Qwen3-235B MoE on Dual Xeon with 60GB VRAM
 
-**Traditional Layer Offloading:**
-```bash
+Tokens per second: 10.4 t/s
+
+Result: 52% speed improvement with the same VRAM usage!
+Example 4: Qwen3-235B MoE on Dual Xeon with 60GB VRAM
+
+Traditional Layer Offloading:
+
+      
 # Standard approach
 python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95
-```
-`Tokens per second: 2.9 t/s`
 
-**With Smart Tensor Offloading:**
-```bash
+
+
+Tokens per second: 2.9 t/s
+
+With TensorTune's Smart Tensor Offloading:
+
+      
 # Using tensor-specific offloading
 python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95 --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
-```
-`Tokens per second: 4.2 t/s`
 
-*Result: 45% speed improvement while maintaining all 95 layers on GPU!*
+    
 
-## 📋 Features
+Tokens per second: 4.2 t/s
 
-- **Intelligent Auto-Tuning:** Automatically finds optimal tensor offload strategies
-- **Multiple Launch Options:** Direct launch, best remembered config, or full auto-tuning
-- **VRAM Monitoring:** Real-time display of GPU VRAM usage
-- **Configuration Management:** Global, model-specific, and session-based settings
-- **Database-Backed History:** Remembers what worked best for each model
-- **Process Management:** Easily start and stop KoboldCpp instances
-- **Both CLI and GUI:** Choose the interface that suits your preference
-- **Intelligent Auto-Tuning:**
-  - Automatically finds optimal tensor offload strategies
-  - Dynamically adjusts GPU layer counts based on offload level
-  - Coordinates both strategies for maximum performance
+Result: 45% speed improvement while maintaining all 95 layers on GPU!
+📋 Features
 
-## 🔧 Installation
+    Intelligent Auto-Tuning: Automatically finds optimal tensor offload strategies.
 
-### Quick Start
+    Multiple Launch Options: Direct launch, best remembered config, or full auto-tuning.
 
-1. Ensure you have Python 3.7+ installed
-2. Download this repository
-3. Run the installation script:
+    VRAM Monitoring: Real-time display of GPU VRAM usage, with support for vendor-specific selection and manual override.
 
-```bash
-python install.py
-```
+    Configuration Management: Global, model-specific, and session-based settings. Configurable data/config paths.
 
-The script will:
-- Check for required dependencies
-- Install necessary Python packages
-- Look for your KoboldCpp installation
-- Create convenient launch scripts
+    Database-Backed History: Remembers what worked best for each model.
 
-### Manual Installation
+    Process Management: Easily start and stop KoboldCpp instances.
+
+    Both CLI and GUI: Choose the interface that suits your preference.
+
+    Dynamically Adjusts GPU Layers: Coordinates GPU layer counts with tensor offload levels for maximum performance.
+
+    Export/Import Settings: Backup and share your TensorTune configurations.
+
+🔧 Installation of TensorTune
+Quick Start
+
+    Ensure you have Python 3.7+ installed.
+
+    Download or clone this repository:
+
+          
+    git clone https://github.com/Viceman256/TensorTune.git
+    cd TensorTune
+
+        
+
+Run the installation script:
+
+      
+python tensortune_install.py
+
+    
+
+IGNORE_WHEN_COPYING_START
+
+    Use code with caution. Bash
+    IGNORE_WHEN_COPYING_END
+
+    The script will:
+
+        Check for required dependencies.
+
+        Install necessary Python packages from requirements.txt.
+
+        Prompt for your KoboldCpp installation path if not found.
+
+        Create convenient launch scripts (launch_cli.sh/.py, launch_gui.sh/.py).
+
+Manual Installation
 
 If you prefer to install manually:
 
-1. Install required dependencies:
-```bash
-pip install -r requirements.txt
-```
+    Install required dependencies:
 
-2. Place all three core files in the same directory:
-   - `koboldcpp_core.py`
-   - `koboldcpp_launcher.py`
-   - `koboldcpp_launcher_gui.py`
+          
+    pip install -r requirements.txt
 
-3. Run the launcher:
-```bash
+        
+
+    IGNORE_WHEN_COPYING_START
+
+Use code with caution. Bash
+IGNORE_WHEN_COPYING_END
+
+Ensure all core files are in the same directory:
+
+    tensortune_core.py
+
+    tensortune_cli.py
+
+    tensortune_gui.py
+
+    tensortune_examples.py (Optional, for viewing examples)
+
+    tensortune_install.py (Optional, for easier setup)
+
+    requirements.txt
+
+Run TensorTune:
+
+      
 # For GUI
-python koboldcpp_launcher_gui.py
+python tensortune_gui.py
 
 # For CLI
-python koboldcpp_launcher.py
-```
+python tensortune_cli.py
 
-## 📚 Using the Launcher
+    
 
-### GUI Version
+IGNORE_WHEN_COPYING_START
+
+    Use code with caution. Bash
+    IGNORE_WHEN_COPYING_END
+
+📚 Using TensorTune
+
+TensorTune automatically creates and manages its configuration files and history database in your user-specific application data/configuration directory (e.g., ~/.config/TensorTune on Linux, AppData/Roaming/TensorTune on Windows).
+GUI Version
 
 The application has three main tabs:
+Main Tab: Tune & Launch
 
-#### Main Tab: Tune & Launch
-- Select your GGUF model
-- Monitor VRAM usage
-- Choose a launch method:
-  - Auto-Tune / Use OT Strategy (recommended)
-  - Launch Best Remembered Config
-  - Direct Launch with Settings Defaults
-- Stop any running KoboldCpp processes
+    Select your GGUF model.
 
-#### Auto-Tuning Session Mode
-- View and adjust the current tensor offload strategy
-- Launch and monitor KoboldCpp for testing
-- Make adjustments based on results (more GPU/CPU)
-- Save successful configurations
-- Edit session or permanent arguments
+    Monitor VRAM usage (reflects selected GPU and override settings).
 
-#### Settings Tab
-- Set KoboldCpp executable path
-- Configure global default arguments
-- Choose UI theme
+    Choose a launch method:
 
-#### History Tab
-- View past launch attempts
-- See which configurations worked best
+        Auto-Tune / Use OT Strategy (recommended).
 
-### CLI Version
+        Launch Best Remembered Config.
+
+        Direct Launch with Settings Defaults.
+
+    Stop any running KoboldCpp processes.
+
+Auto-Tuning Session Mode
+
+    View and adjust the current tensor offload strategy (OT Level).
+
+    Launch and monitor KoboldCpp for testing. Output is displayed in the GUI.
+
+    Make adjustments based on results (more GPU/CPU offload).
+
+    Save successful configurations to the history database.
+
+    Edit session or permanent base arguments for the model.
+
+Settings Tab
+
+    Set KoboldCpp executable path.
+
+    Configure global default arguments for KoboldCpp.
+
+    GPU Management: Select target GPU type and ID for VRAM monitoring.
+
+    VRAM Override: Manually set the total VRAM budget for launcher calculations.
+
+    Choose UI theme (Dark/Light/System).
+
+    Manage Model-Specific argument overrides.
+
+    Export/Import TensorTune settings.
+
+    Reset all settings to default.
+
+History Tab
+
+    View past launch attempts.
+
+    See which configurations worked best, filtered by model or globally.
+
+CLI Version
 
 The CLI offers an interactive text-based interface with similar functionality:
 
-1. Select a GGUF model
-2. Choose between auto-tuning or direct launch
-3. Follow the prompts to adjust settings and launch KoboldCpp
-4. View launch history and performance statistics
+    Select a GGUF model.
 
-## 📝 Understanding Tensor Offloading
+    Choose between auto-tuning or direct launch.
 
-Traditional layer offloading moves entire transformer layers between CPU and GPU. Tensor offloading is more granular - it selectively keeps specific tensors (like FFN up/down/gate) on CPU while keeping smaller, computation-intensive tensors on GPU.
+    Follow the prompts to adjust settings and launch KoboldCpp.
 
-The launcher helps you find the optimal balance by:
-1. Analyzing your model
-2. Testing different offloading patterns
-3. Monitoring VRAM usage and load success
-4. Remembering what works best for each model
+    View launch history and performance statistics.
 
-## 🔍 Troubleshooting
+    Access "Launcher Settings" to configure paths, GPU targets, VRAM overrides, and default arguments.
 
-- **KoboldCpp Not Found**: Set the correct path in the Settings tab
-- **Python Errors**: Ensure you've installed all dependencies
-- **VRAM Info Not Displaying**: Install pynvml for NVIDIA GPU monitoring
-- **Auto-Tuning Fails**: Try reducing context size or other memory-intensive settings
+📝 Understanding Tensor Offloading
 
-## 🙏 Acknowledgments
+Traditional layer offloading moves entire transformer layers between CPU and GPU. Tensor offloading is more granular - it selectively keeps specific tensors (like FFN up/down/gate) on CPU while keeping smaller, computation-intensive tensors (like attention) on GPU.
 
-This project was inspired by the [tensor offloading technique](https://www.reddit.com/r/LocalLLaMA/comments/1ki3sze/running_qwen3_235b_on_a_single_3060_12gb_6_ts/) shared on Reddit. It aims to make this optimization method accessible to more users.
+TensorTune helps you find the optimal balance by:
 
-## 📜 License
+    Analyzing your model's characteristics (size, layers, MoE).
+
+    Testing different offloading patterns (OT Levels).
+
+    Monitoring VRAM usage and load success/failure.
+
+    Remembering what works best for each model based on your hardware and available VRAM.
+
+🔍 Troubleshooting
+
+    KoboldCpp Not Found: Set the correct path in the Settings tab (GUI) or Launcher Settings (CLI).
+
+    Python Errors: Ensure you've installed all dependencies from requirements.txt.
+
+    VRAM Info Not Displaying: Install pynvml for NVIDIA GPU monitoring, ensure AMD/Intel drivers and necessary libraries (pyadlx, rocm-smi, pyze) are correctly set up if applicable. Check GPU selection settings.
+
+    Auto-Tuning Fails: Try reducing context size or other memory-intensive settings. Manually adjust the OT Level towards more CPU offload.
+
+🙏 Acknowledgments
+
+This project was inspired by the tensor offloading technique shared on Reddit. TensorTune aims to make this optimization method accessible and manageable for more users.
+📜 License
 
 This project is licensed under the MIT License - see the LICENSE.md file for details.
+📸 Screenshots
 
----
-
-## 📸 Screenshots
 
 CLI Example 1
-![CLI Example 1](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/cli1.png)
+
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli1.png)
 
 CLI Example 2
-![CLI Example 2](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/cli2.png)
 
-GUI Example 1
-![GUI Example 1](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI1.png)
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli2.png)
 
-GUI Example 2
-![GUI Example 2](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI2.png)
+GUI Example 1 (Main Tab)
 
-GUI Example 3
-![GUI Example 3](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI3.png)
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI1.png)
 
-GUI Example 4
-![GUI Example 4](https://github.com/Viceman256/KoboldCpp-Smart-Launcher-v1.0.0/blob/main/screenshots/GUI4.png)
+GUI Example 2 (Tuning Session)
 
-## 🤝 Contributing
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI2.png)
+
+GUI Example 3 (Settings Tab)
+
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI3.png)
+
+GUI Example 4 (History Tab)
+
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
+
+Latest Release: TensorTune v1.0.0
+
+Key changes in this version include:
+* Rebranding to TensorTune.
+* Improved configuration management and GPU/VRAM handling.
+* Enhanced auto-tuning heuristics.
+* GUI and CLI updates for better user experience.
+
+For a full list of changes, see the [v1.0.0 Release Notes](https://github.com/Viceman256/TensorTune/releases/tag/v1.0.0) or the [CHANGELOG.md](CHANGELOG.md).
+
+🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
