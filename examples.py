@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example commands for KoboldCpp Smart Launcher
+Example commands for TensorTune
 
 This script demonstrates performance improvements using tensor offloading.
 Run this script to see example benchmarks with different configurations.
@@ -183,7 +183,7 @@ bandwidth-intensive parts to CPU. This results in:
 - Better parallelization of computation
 - Reduced bottlenecks
 
-The KoboldCpp Smart Launcher helps you find the optimal balance for your specific
+The TensorTune helps you find the optimal balance for your specific
 hardware and model combination.""")
 
 def main():
@@ -196,7 +196,7 @@ def main():
     print(f"Python: {sys_info['python']}")
     print(f"GPU: {sys_info['gpu']}")
     
-    print_header("KoboldCpp Smart Launcher - Performance Examples")
+    print_header("TensorTune - Performance Examples")
     print(f"""This script demonstrates the performance improvements possible with tensor offloading.
 The examples below show real-world results from different hardware configurations.
     
@@ -213,11 +213,11 @@ Your results may vary depending on your specific hardware, model, and settings."
     # Explain performance
     explain_performance()
     
-    print_header("Try KoboldCpp Smart Launcher")
+    print_header("Try TensorTune")
     print(f"""To try tensor offloading with your own models:
 
-1. {BOLD}GUI Version:{ENDC} Run 'python koboldcpp_launcher_gui.py'
-2. {BOLD}CLI Version:{ENDC} Run 'python koboldcpp_launcher.py'
+1. {BOLD}GUI Version:{ENDC} Run 'python tensortune_gui.py'
+2. {BOLD}CLI Version:{ENDC} Run 'python tensortune_cli.py'
 
 The launcher will help you find the optimal tensor offload strategy for your models.""")
 

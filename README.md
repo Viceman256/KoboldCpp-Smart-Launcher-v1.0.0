@@ -130,12 +130,6 @@ Run the installation script:
       
 python tensortune_install.py
 
-    
-
-IGNORE_WHEN_COPYING_START
-
-    Use code with caution. Bash
-    IGNORE_WHEN_COPYING_END
 
     The script will:
 
@@ -156,12 +150,6 @@ If you prefer to install manually:
           
     pip install -r requirements.txt
 
-        
-
-    IGNORE_WHEN_COPYING_START
-
-Use code with caution. Bash
-IGNORE_WHEN_COPYING_END
 
 Ensure all core files are in the same directory:
 
@@ -171,9 +159,9 @@ Ensure all core files are in the same directory:
 
     tensortune_gui.py
 
-    tensortune_examples.py (Optional, for viewing examples)
+    examples.py 
 
-    tensortune_install.py (Optional, for easier setup)
+    install.py 
 
     requirements.txt
 
@@ -186,12 +174,6 @@ python tensortune_gui.py
 # For CLI
 python tensortune_cli.py
 
-    
-
-IGNORE_WHEN_COPYING_START
-
-    Use code with caution. Bash
-    IGNORE_WHEN_COPYING_END
 
 📚 Using TensorTune
 

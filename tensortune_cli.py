@@ -20,7 +20,7 @@ from pathlib import Path
 import shutil # For shutil.which
 
 # Import the core script
-import koboldcpp_core
+import tensortune_core
 
 # Handle dependency imports with helpful error messages
 dependencies = {
@@ -90,7 +90,7 @@ else: # Fallback for no Rich
             if response in ['n', 'no']: return False
             print_error("Invalid input. Please answer 'yes' or 'no'.")
 
-# --- Global Configuration Variables (populated from koboldcpp_core) ---
+# --- Global Configuration Variables (populated from tensortune_core) ---
 CONFIG: Dict[str, Any] = {}
 KOBOLDCPP_EXECUTABLE = "" # Populated from CONFIG
 DB_FILE = "" # Populated from CONFIG (absolute path)
@@ -155,7 +155,7 @@ We need to configure a few things for the first run.
         detected_exe_candidate = shutil.which(os.path.basename(default_exe_name_platform))
 
 
-    current_exe_in_config = config_dict.get("koboldcpp_executable", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["koboldcpp_executable"])
+    current_exe_in_config = config_dict.get("koboldcpp_executable", tensortune_core.DEFAULT_CONFIG_TEMPLATE["koboldcpp_executable"])
     exe_prompt_default = detected_exe_candidate or current_exe_in_config
 
     if detected_exe_candidate: print_success(f"Auto-detected KoboldCpp candidate: {detected_exe_candidate}")
@@ -206,7 +206,7 @@ We need to configure a few things for the first run.
     db_file_location_absolute = config_dict["db_file"] # Already absolute from core
     print_info(f"History database will be stored at: {db_file_location_absolute}")
 
-    default_port_from_core_template = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"]["--port"]
+    default_port_from_core_template = tensortune_core.DEFAULT_CONFIG_TEMPLATE["default_args"]["--port"]
     current_port_in_config_dict = config_dict.get("default_args", {}).get("--port", default_port_from_core_template)
     while True:
         user_port_str_input = prompt(f"Default KoboldCpp port?", default=str(current_port_in_config_dict))
@@ -241,13 +241,13 @@ We need to configure a few things for the first run.
     print_info("\nGPU Detection Preferences (used for 'auto' GPU mode and VRAM display):")    
     
     print_info("\nGPU Detection Preferences (used for 'auto' GPU mode and VRAM display):")
-    gpu_detect_prefs = config_dict.get("gpu_detection", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["gpu_detection"].copy())
+    gpu_detect_prefs = config_dict.get("gpu_detection", tensortune_core.DEFAULT_CONFIG_TEMPLATE["gpu_detection"].copy())
     for vendor in ["nvidia", "amd", "intel", "apple"]:
         gpu_detect_prefs[vendor] = confirm(f"Enable detection for {vendor.upper()} GPUs?", default=gpu_detect_prefs.get(vendor, True))
     config_dict["gpu_detection"] = gpu_detect_prefs
 
     config_dict['first_run_completed'] = True
-    save_success, save_msg = koboldcpp_core.save_launcher_config(config_dict)
+    save_success, save_msg = tensortune_core.save_launcher_config(config_dict)
     if save_success: print_success("\nInitial setup complete! Configuration saved.")
     else: print_error(f"\nFailed to save initial configuration: {save_msg}")
     return save_success
@@ -301,7 +301,7 @@ def select_gguf_file_cli() -> Optional[str]:
                 abs_filepath = os.path.abspath(filepath_selected)
                 last_gguf_directory = os.path.dirname(abs_filepath)
                 CONFIG["last_used_gguf_dir"] = last_gguf_directory
-                koboldcpp_core.save_launcher_config(CONFIG) # Save last_used_gguf_dir
+                tensortune_core.save_launcher_config(CONFIG) # Save last_used_gguf_dir
                 print_success(f"Selected via dialog: {os.path.basename(abs_filepath)}")
                 return abs_filepath
             else:
@@ -331,7 +331,7 @@ def select_gguf_file_cli() -> Optional[str]:
             abs_path_manual = os.path.abspath(potential_full_path)
             last_gguf_directory = os.path.dirname(abs_path_manual)
             CONFIG["last_used_gguf_dir"] = last_gguf_directory
-            koboldcpp_core.save_launcher_config(CONFIG) # Save last_used_gguf_dir
+            tensortune_core.save_launcher_config(CONFIG) # Save last_used_gguf_dir
             print_success(f"Selected via manual input: {os.path.basename(abs_path_manual)}")
             return abs_path_manual
         else:
@@ -422,7 +422,7 @@ def manage_launcher_settings_cli():
             # Get actual detected type if mode is 'auto'
             effective_gpu_type = gpu_type_for_listing
             if gpu_type_for_listing == "auto":
-                _, _, _, gpu_info_auto = koboldcpp_core.get_available_vram_mb(CONFIG)
+                _, _, _, gpu_info_auto = tensortune_core.get_available_vram_mb(CONFIG)
                 if gpu_info_auto and gpu_info_auto.get("success") and gpu_info_auto.get("type") not in ["Unknown/None_Auto", "N/A", "Unknown/None"]:
                     effective_gpu_type = gpu_info_auto.get("type", "auto").lower()
                     if effective_gpu_type == "apple_metal": effective_gpu_type = "apple"
@@ -432,10 +432,10 @@ def manage_launcher_settings_cli():
                     effective_gpu_type = "none" # Prevent listing attempts for invalid type
 
             gpus_found = []
-            if effective_gpu_type == "nvidia": gpus_found = koboldcpp_core.list_nvidia_gpus()
-            elif effective_gpu_type == "amd": gpus_found = koboldcpp_core.list_amd_gpus_windows() if platform.system() == "Windows" else koboldcpp_core.list_amd_gpus_linux()
-            elif effective_gpu_type == "intel": gpus_found = koboldcpp_core.list_intel_gpus()
-            elif effective_gpu_type == "apple": gpus_found = koboldcpp_core.list_apple_gpus()
+            if effective_gpu_type == "nvidia": gpus_found = tensortune_core.list_nvidia_gpus()
+            elif effective_gpu_type == "amd": gpus_found = tensortune_core.list_amd_gpus_windows() if platform.system() == "Windows" else tensortune_core.list_amd_gpus_linux()
+            elif effective_gpu_type == "intel": gpus_found = tensortune_core.list_intel_gpus()
+            elif effective_gpu_type == "apple": gpus_found = tensortune_core.list_apple_gpus()
             
             if gpus_found:
                 print_info(f"Available GPUs for type '{effective_gpu_type.upper()}':")
@@ -485,12 +485,12 @@ def manage_launcher_settings_cli():
             else:
                 CONFIG["override_vram_budget"] = False
                 # Optionally, you might want to reset manual_vram_total_mb to default when override is disabled
-                # CONFIG["manual_vram_total_mb"] = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["manual_vram_total_mb"]
+                # CONFIG["manual_vram_total_mb"] = tensortune_core.DEFAULT_CONFIG_TEMPLATE["manual_vram_total_mb"]
                 print_success("VRAM Override DISABLED. Launcher will use auto-detected VRAM values.")
         
         elif choice == '7':
             print_info("GPU Detection Preferences:")
-            gpu_detect_prefs = CONFIG.get("gpu_detection", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["gpu_detection"].copy())
+            gpu_detect_prefs = CONFIG.get("gpu_detection", tensortune_core.DEFAULT_CONFIG_TEMPLATE["gpu_detection"].copy())
             for vendor in ["nvidia", "amd", "intel", "apple"]:
                 gpu_detect_prefs[vendor] = confirm(f"Enable detection for {vendor.upper()} GPUs?", default=gpu_detect_prefs.get(vendor, True))
             CONFIG["gpu_detection"] = gpu_detect_prefs
@@ -518,47 +518,47 @@ def manage_launcher_settings_cli():
         elif choice == 'e': # Export
             export_path = prompt("Enter filepath to export configuration (e.g., launcher_backup.json)", default="kcpp_launcher_config_export.json").strip()
             if export_path:
-                success_export, msg_export = koboldcpp_core.export_config_to_file(CONFIG.copy(), export_path)
+                success_export, msg_export = tensortune_core.export_config_to_file(CONFIG.copy(), export_path)
                 if success_export: print_success(msg_export)
                 else: print_error(msg_export)
         
         elif choice == 'i': # Import
             import_path = prompt("Enter filepath of configuration to import").strip()
             if import_path and os.path.exists(import_path):
-                imported_data, msg_import = koboldcpp_core.import_config_from_file(import_path)
+                imported_data, msg_import = tensortune_core.import_config_from_file(import_path)
                 if imported_data:
-                    if confirm(f"Importing will OVERWRITE current settings. Backup current config? ({koboldcpp_core.CONFIG_FILE})", default=True):
-                        backup_path_auto = koboldcpp_core.CONFIG_FILE + f".backup_before_import_{time.strftime('%Y%m%d-%H%M%S')}.json"
+                    if confirm(f"Importing will OVERWRITE current settings. Backup current config? ({tensortune_core.CONFIG_FILE})", default=True):
+                        backup_path_auto = tensortune_core.CONFIG_FILE + f".backup_before_import_{time.strftime('%Y%m%d-%H%M%S')}.json"
                         try:
-                            if os.path.exists(koboldcpp_core.CONFIG_FILE): # Check if source file exists
-                                shutil.copy2(koboldcpp_core.CONFIG_FILE, backup_path_auto)
+                            if os.path.exists(tensortune_core.CONFIG_FILE): # Check if source file exists
+                                shutil.copy2(tensortune_core.CONFIG_FILE, backup_path_auto)
                                 print_success(f"Current config backed up to {backup_path_auto}")
                             else:
-                                print_warning(f"Current config file {koboldcpp_core.CONFIG_FILE} not found. Cannot backup.")
+                                print_warning(f"Current config file {tensortune_core.CONFIG_FILE} not found. Cannot backup.")
                         except Exception as e_backup:
                             print_warning(f"Could not backup current config: {e_backup}")
                     
                     # Before overwriting CONFIG, save the current one if there are pending changes from this menu session
-                    save_ok_before_import, save_msg_before_import = koboldcpp_core.save_launcher_config(CONFIG)
+                    save_ok_before_import, save_msg_before_import = tensortune_core.save_launcher_config(CONFIG)
                     if not save_ok_before_import:
                         print_warning(f"Note: Failed to save current session's pending setting changes before import: {save_msg_before_import}")
 
                     # Now apply imported data and save it as the new primary config
                     temp_config_for_saving_import = imported_data.copy() # Use a copy
                     # Ensure db_file path is made absolute if it's relative after import
-                    db_file_val_from_imported = temp_config_for_saving_import.get("db_file", koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
+                    db_file_val_from_imported = temp_config_for_saving_import.get("db_file", tensortune_core.DEFAULT_CONFIG_TEMPLATE["db_file"])
                     if not os.path.isabs(db_file_val_from_imported):
                         # If db_file is just a basename, make it absolute to user_data_dir
                         # If it's a relative path, it's trickier; for CLI, perhaps just keep it and let core handle on next full load
                         # For now, let's assume core's save_launcher_config will handle this correctly if it's a basename.
                         # If it's a truly relative path like "subdir/db.sqlite", user should be aware.
                          if os.path.basename(db_file_val_from_imported) == db_file_val_from_imported: # Is it just a filename?
-                            temp_config_for_saving_import["db_file"] = os.path.join(koboldcpp_core._get_user_app_data_dir(), db_file_val_from_imported)
+                            temp_config_for_saving_import["db_file"] = os.path.join(tensortune_core._get_user_app_data_dir(), db_file_val_from_imported)
 
-                    save_imported_ok, save_imported_msg = koboldcpp_core.save_launcher_config(temp_config_for_saving_import)
+                    save_imported_ok, save_imported_msg = tensortune_core.save_launcher_config(temp_config_for_saving_import)
                     if save_imported_ok:
                         # Reload CONFIG from the newly saved file to ensure consistency
-                        CONFIG, _, _ = koboldcpp_core.load_config()
+                        CONFIG, _, _ = tensortune_core.load_config()
                         # Re-populate global vars that depend on CONFIG
                         KOBOLDCPP_EXECUTABLE = CONFIG["koboldcpp_executable"]
                         DB_FILE = CONFIG["db_file"]
@@ -574,17 +574,17 @@ def manage_launcher_settings_cli():
 
         elif choice == 'r': # Reset
              if confirm("WARNING: This will reset ALL launcher settings to defaults. Are you sure?", default=False):
-                backup_path_reset = koboldcpp_core.CONFIG_FILE + f".backup_before_reset_{time.strftime('%Y%m%d-%H%M%S')}.json"
+                backup_path_reset = tensortune_core.CONFIG_FILE + f".backup_before_reset_{time.strftime('%Y%m%d-%H%M%S')}.json"
                 try:
-                    if os.path.exists(koboldcpp_core.CONFIG_FILE):
-                        shutil.copy2(koboldcpp_core.CONFIG_FILE, backup_path_reset)
+                    if os.path.exists(tensortune_core.CONFIG_FILE):
+                        shutil.copy2(tensortune_core.CONFIG_FILE, backup_path_reset)
                         print_success(f"Current config backed up to {backup_path_reset}")
-                    if os.path.exists(koboldcpp_core.CONFIG_FILE): # Check again before removing
-                        os.remove(koboldcpp_core.CONFIG_FILE)
+                    if os.path.exists(tensortune_core.CONFIG_FILE): # Check again before removing
+                        os.remove(tensortune_core.CONFIG_FILE)
                 except Exception as e_remove:
                     print_warning(f"Could not remove/backup current config for reset: {e_remove}")
 
-                temp_conf, _, load_msg = koboldcpp_core.load_config() # This saves defaults if file was missing
+                temp_conf, _, load_msg = tensortune_core.load_config() # This saves defaults if file was missing
                 CONFIG = temp_conf
                 KOBOLDCPP_EXECUTABLE = CONFIG["koboldcpp_executable"]
                 DB_FILE = CONFIG["db_file"]
@@ -597,7 +597,7 @@ def manage_launcher_settings_cli():
 
         # Save changes made in this settings menu session (unless it was import/reset which handle saving)
         if choice not in ['i', 'r']: # 'e' should save current config state.
-            save_ok, save_message = koboldcpp_core.save_launcher_config(CONFIG)
+            save_ok, save_message = tensortune_core.save_launcher_config(CONFIG)
             if not save_ok:
                 print_error(f"Failed to save settings: {save_message}")
             else:
@@ -612,7 +612,7 @@ def view_db_history_cli(model_filepath_filter: Optional[str] = None):
     else:
         print_info(f"Loading global launch history from DB: {DB_FILE}")
 
-    all_history_entries_from_db = koboldcpp_core.get_history_entries(DB_FILE, limit=100)
+    all_history_entries_from_db = tensortune_core.get_history_entries(DB_FILE, limit=100)
 
     if not all_history_entries_from_db:
         print_info("No history records found in the database.")
@@ -672,7 +672,7 @@ def view_db_history_cli(model_filepath_filter: Optional[str] = None):
 
 
 def get_effective_session_args(model_file_path: Optional[str], session_specific_overrides: Dict[str, Any]) -> Dict[str, Any]:
-    effective_args_dict = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+    effective_args_dict = tensortune_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
     global_defaults_from_config = CONFIG.get("default_args", {})
     effective_args_dict.update(global_defaults_from_config)
 
@@ -687,7 +687,7 @@ def get_effective_session_args(model_file_path: Optional[str], session_specific_
 def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], current_session_args_overrides: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], bool]:
     permanent_args_were_changed = False
     editable_arg_defs = [
-        d for d in koboldcpp_core.KOBOLDCPP_ARG_DEFINITIONS
+        d for d in tensortune_core.KOBOLDCPP_ARG_DEFINITIONS
         if d["key"] not in ["--model", "--overridetensors"]
     ]
     editable_arg_defs.sort(key=lambda x: (x.get("category", "zz_default"), x.get("name", x["key"])))
@@ -750,7 +750,7 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
                 
                 model_specifics_to_set = CONFIG["model_specific_args"][model_path_for_specifics]
                 
-                global_baseline_args_for_perm = koboldcpp_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
+                global_baseline_args_for_perm = tensortune_core.DEFAULT_CONFIG_TEMPLATE["default_args"].copy()
                 global_baseline_args_for_perm.update(CONFIG.get("default_args", {}))
 
                 for arg_def_perm in editable_arg_defs:
@@ -775,7 +775,7 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str], c
                 if not CONFIG["model_specific_args"][model_path_for_specifics]:
                     del CONFIG["model_specific_args"][model_path_for_specifics]
                 
-                koboldcpp_core.save_launcher_config(CONFIG)
+                tensortune_core.save_launcher_config(CONFIG)
                 permanent_args_were_changed = True
                 print_success(f"Permanent arguments saved for {os.path.basename(model_path_for_specifics)}.")
                 temp_session_overrides.clear()
@@ -906,28 +906,28 @@ def launch_and_monitor_for_tuning_cli():
     last_approx_vram_used_kcpp_mb = None 
     level_of_last_monitored_run = current_tuning_attempt_level
 
-    ot_string_for_launch = koboldcpp_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
-    args_for_kcpp_run_list = koboldcpp_core.build_command(
+    ot_string_for_launch = tensortune_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
+    args_for_kcpp_run_list = tensortune_core.build_command(
         current_tuning_model_path_local, ot_string_for_launch,
         current_tuning_model_analysis_local, current_tuning_session_base_args
     )
-    last_proposed_command_list_for_db = koboldcpp_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_run_list)
+    last_proposed_command_list_for_db = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_run_list)
     
     # Get actual HW free VRAM for DB logging, not budgeted
-    _, _, _, gpu_info_rich_before_launch = koboldcpp_core.get_available_vram_mb(
+    _, _, _, gpu_info_rich_before_launch = tensortune_core.get_available_vram_mb(
         CONFIG, # Pass current global config
         target_gpu_type=CONFIG.get("gpu_selection_mode", "auto") if CONFIG.get("gpu_selection_mode", "auto") != "auto" else None,
         target_gpu_index=CONFIG.get("selected_gpu_index", 0)
     )
     vram_at_decision_for_db = gpu_info_rich_before_launch.get("free_mb", 0.0) # Actual HW free VRAM
 
-    kcpp_process_obj, launch_error_msg = koboldcpp_core.launch_process(
+    kcpp_process_obj, launch_error_msg = tensortune_core.launch_process(
         last_proposed_command_list_for_db, capture_output=True, new_console=False, use_text_mode=False
     )
 
     if launch_error_msg or not kcpp_process_obj:
         print_error(f"Failed to launch KCPP for monitoring: {launch_error_msg or 'Unknown error'}")
-        koboldcpp_core.save_config_to_db(
+        tensortune_core.save_config_to_db(
             DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
             vram_at_decision_for_db, last_proposed_command_list_for_db,
             level_of_last_monitored_run, "LAUNCH_FAILED_SETUP_CLI", None
@@ -975,7 +975,7 @@ def launch_and_monitor_for_tuning_cli():
        "OOM" in final_outcome_key_from_monitor.upper() or "CRASH" in final_outcome_key_from_monitor.upper():
         if kcpp_process_obj and kcpp_process_obj.poll() is None:
             print_info("Terminating KCPP process due to unfavorable outcome...")
-            koboldcpp_core.kill_process(kcpp_process_obj.pid, force=True)
+            tensortune_core.kill_process(kcpp_process_obj.pid, force=True)
         kcpp_process_obj = None
 
     db_outcome_to_save_str = final_outcome_key_from_monitor
@@ -985,7 +985,7 @@ def launch_and_monitor_for_tuning_cli():
         time.sleep(max(2.0, float(vram_stabilization_wait_s)))
         
         # Get full GPU info, including actual HW and budgeted VRAM after load
-        _, _, _, gpu_info_rich_after_load = koboldcpp_core.get_available_vram_mb(
+        _, _, _, gpu_info_rich_after_load = tensortune_core.get_available_vram_mb(
             CONFIG, # Pass current global config
             target_gpu_type=CONFIG.get("gpu_selection_mode", "auto") if CONFIG.get("gpu_selection_mode", "auto") != "auto" else None,
             target_gpu_index=CONFIG.get("selected_gpu_index", 0)
@@ -1020,7 +1020,7 @@ def launch_and_monitor_for_tuning_cli():
                 "level": level_of_last_monitored_run, "outcome": db_outcome_to_save_str, "vram_used_mb": "N/A"
             }
 
-    koboldcpp_core.save_config_to_db(
+    tensortune_core.save_config_to_db(
         DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
         vram_at_decision_for_db, # Actual HW free VRAM before launch
         last_proposed_command_list_for_db,
@@ -1080,7 +1080,7 @@ def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp
 
     if kcpp_is_still_running and should_stop_monitored_kcpp:
         print_info(f"Stopping monitored KCPP instance (PID: {kcpp_process_obj.pid})...")
-        koboldcpp_core.kill_process(kcpp_process_obj.pid, force=True)
+        tensortune_core.kill_process(kcpp_process_obj.pid, force=True)
         kcpp_process_obj = None
 
     if user_action_choice == 'u':
@@ -1097,7 +1097,7 @@ def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp
             if AUTO_OPEN_WEBUI: webbrowser.open(f"http://localhost:{port_for_webui}")
             
             final_outcome_for_db_update = outcome_from_monitor + db_outcome_suffix_for_action
-            koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update, last_approx_vram_used_kcpp_mb)
+            tensortune_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update, last_approx_vram_used_kcpp_mb)
             
             tuning_in_progress = False
             session_control_result = kcpp_control_loop_cli(port_for_webui, is_monitored_instance_being_controlled=False)
@@ -1135,7 +1135,7 @@ def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp
 
     if db_outcome_suffix_for_action:
         final_outcome_for_db_update_choice = outcome_from_monitor + db_outcome_suffix_for_action
-        koboldcpp_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update_choice, last_approx_vram_used_kcpp_mb)
+        tensortune_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update_choice, last_approx_vram_used_kcpp_mb)
     
     return "continue_tuning"
 
@@ -1145,13 +1145,13 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
 
     if last_launched_process_info["process_obj"] and last_launched_process_info["process_obj"].poll() is None:
         print_info(f"Stopping previously launched KCPP (PID: {last_launched_process_info['pid']})...")
-        koboldcpp_core.kill_process(last_launched_process_info["pid"])
+        tensortune_core.kill_process(last_launched_process_info["pid"])
     last_launched_process_info = {"pid": None, "process_obj": None, "command_list": []}
 
     print_info(f"Launching KoboldCpp for use...")
     
     # Get actual HW VRAM for DB logging
-    _, _, _, gpu_info_rich_direct_launch = koboldcpp_core.get_available_vram_mb(
+    _, _, _, gpu_info_rich_direct_launch = tensortune_core.get_available_vram_mb(
         CONFIG,
         target_gpu_type=CONFIG.get("gpu_selection_mode", "auto") if CONFIG.get("gpu_selection_mode", "auto") != "auto" else None,
         target_gpu_index=CONFIG.get("selected_gpu_index", 0)
@@ -1164,15 +1164,15 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
     final_level_for_db_log = level_for_db_record if level_for_db_record is not None else \
                              (current_tuning_attempt_level if tuning_in_progress else 0)
 
-    koboldcpp_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, 
+    tensortune_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, 
                                    vram_before_this_launch, command_list_to_run, 
                                    final_level_for_db_log, db_outcome_on_success, None)
     
-    launched_kcpp_process, launch_err_msg = koboldcpp_core.launch_process(command_list_to_run, capture_output=False, new_console=True)
+    launched_kcpp_process, launch_err_msg = tensortune_core.launch_process(command_list_to_run, capture_output=False, new_console=True)
 
     if launch_err_msg or not launched_kcpp_process:
         print_error(f"Failed to launch KoboldCPP: {launch_err_msg or 'Unknown error'}")
-        koboldcpp_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, 
+        tensortune_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, 
                                        vram_before_this_launch, command_list_to_run, 
                                        final_level_for_db_log, "LAUNCH_FOR_USE_FAILED_CLI", None)
         return None
@@ -1183,7 +1183,7 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
         last_launched_process_info["command_list"] = command_list_to_run
         
         if AUTO_OPEN_WEBUI:
-            args_dict_from_cmd = koboldcpp_core.args_list_to_dict(command_list_to_run[1:] if len(command_list_to_run)>1 and (command_list_to_run[0].lower().endswith("python.exe") or command_list_to_run[0].lower().endswith("python")) else command_list_to_run)
+            args_dict_from_cmd = tensortune_core.args_list_to_dict(command_list_to_run[1:] if len(command_list_to_run)>1 and (command_list_to_run[0].lower().endswith("python.exe") or command_list_to_run[0].lower().endswith("python")) else command_list_to_run)
             port_to_open_webui = args_dict_from_cmd.get("--port", CONFIG.get("default_args", {}).get("--port", "5000"))
             print_info(f"Attempting to open Web UI at http://localhost:{port_to_open_webui} in a few seconds...")
             threading.Timer(3.0, lambda: webbrowser.open(f"http://localhost:{port_to_open_webui}")).start()
@@ -1215,14 +1215,14 @@ def kcpp_control_loop_cli(port_to_use_for_webui: str, is_monitored_instance_bein
         if control_choice == 's':
             if process_object_to_control and pid_to_control_val:
                 print_info(f"Stopping KCPP (PID: {pid_to_control_val})...")
-                koboldcpp_core.kill_process(pid_to_control_val)
+                tensortune_core.kill_process(pid_to_control_val)
             if is_monitored_instance_being_controlled: kcpp_process_obj = None
             else: last_launched_process_info = {"pid": None, "process_obj": None, "command_list": []}
             return "new_gguf"
         elif control_choice == 'q':
             if process_object_to_control and pid_to_control_val:
                 print_info(f"Stopping KCPP (PID: {pid_to_control_val}) and quitting launcher...")
-                koboldcpp_core.kill_process(pid_to_control_val)
+                tensortune_core.kill_process(pid_to_control_val)
             return "quit_script"
         elif control_choice == 'e':
             print_info(f"Exiting launcher. KCPP{active_pid_display_str} will be left running.")
@@ -1256,7 +1256,7 @@ def run_model_tuning_session_cli() -> str:
                f"Est. Full VRAM: {current_tuning_model_analysis_local.get('estimated_vram_gb_full_gpu', 'N/A')}GB")
 
     # Get current VRAM info (both budgeted and actual HW free VRAM)
-    _, _, _, current_gpu_full_info = koboldcpp_core.get_available_vram_mb(
+    _, _, _, current_gpu_full_info = tensortune_core.get_available_vram_mb(
         CONFIG,
         target_gpu_type=CONFIG.get("gpu_selection_mode", "auto") if CONFIG.get("gpu_selection_mode", "auto") != "auto" else None,
         target_gpu_index=CONFIG.get("selected_gpu_index", 0)
@@ -1294,7 +1294,7 @@ def run_model_tuning_session_cli() -> str:
             print_info(f"Heuristic: Ample VRAM budget. Adjusting OT towards GPU.")
 
     # Use actual hardware free VRAM for historical lookup comparison
-    best_historical_config = koboldcpp_core.find_best_historical_config(DB_FILE, current_tuning_model_analysis_local, current_actual_hw_free_vram_mb, CONFIG)
+    best_historical_config = tensortune_core.find_best_historical_config(DB_FILE, current_tuning_model_analysis_local, current_actual_hw_free_vram_mb, CONFIG)
 
     if best_historical_config and "attempt_level" in best_historical_config:
         print_info(f"Found historical config. Level: {best_historical_config['attempt_level']}, Outcome: {best_historical_config['outcome']}")
@@ -1313,7 +1313,7 @@ def run_model_tuning_session_cli() -> str:
         
         remembered_args_list_from_db = best_historical_config.get("args_list", [])
         if remembered_args_list_from_db:
-            remembered_args_dict_parsed = koboldcpp_core.args_list_to_dict(remembered_args_list_from_db)
+            remembered_args_dict_parsed = tensortune_core.args_list_to_dict(remembered_args_list_from_db)
             remembered_args_dict_parsed.pop("--model", None); remembered_args_dict_parsed.pop("--overridetensors", None)
             current_tuning_session_base_args.update(remembered_args_dict_parsed)
             print_info(f"Applied remembered arguments to current session base. OT Level target adjusted to: {initial_heuristic_level}")
@@ -1326,9 +1326,9 @@ def run_model_tuning_session_cli() -> str:
     while tuning_in_progress:
         print("\n" + "=" * 70)
         current_tuning_attempt_level = max(current_tuning_min_level, min(current_tuning_attempt_level, current_tuning_max_level))
-        ot_string_generated = koboldcpp_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
-        strategy_description = koboldcpp_core.get_offload_description(current_tuning_model_analysis_local, current_tuning_attempt_level, ot_string_generated)
-        gpu_layers_for_level = koboldcpp_core.get_gpu_layers_for_level(current_tuning_model_analysis_local, current_tuning_attempt_level)
+        ot_string_generated = tensortune_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
+        strategy_description = tensortune_core.get_offload_description(current_tuning_model_analysis_local, current_tuning_attempt_level, ot_string_generated)
+        gpu_layers_for_level = tensortune_core.get_gpu_layers_for_level(current_tuning_model_analysis_local, current_tuning_attempt_level)
         total_model_layers = current_tuning_model_analysis_local.get('num_layers', 32)
 
         if last_successful_monitored_run_details_cli:
@@ -1351,11 +1351,11 @@ def run_model_tuning_session_cli() -> str:
             print_info(f"Model: {os.path.basename(current_tuning_model_path_local)}")
             print(f"🛠️ OT Level: {current_tuning_attempt_level}\n   Range: {current_tuning_min_level}=MaxGPU to {current_tuning_max_level}={'SuperMaxCPU' if current_tuning_model_analysis_local.get('is_moe') else 'MaxCPU'}\n   Strategy: {strategy_description}\n   Regex: {(ot_string_generated or 'None')}\n   GPU Layers: {gpu_layers_for_level}/{total_model_layers}")
 
-        args_for_kcpp_display_list = koboldcpp_core.build_command(current_tuning_model_path_local, ot_string_generated, current_tuning_model_analysis_local, current_tuning_session_base_args)
-        display_full_command_list = koboldcpp_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_display_list)
+        args_for_kcpp_display_list = tensortune_core.build_command(current_tuning_model_path_local, ot_string_generated, current_tuning_model_analysis_local, current_tuning_session_base_args)
+        display_full_command_list = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_display_list)
         
         # Use rich GPU info for display
-        _, _, vram_info_message_str, current_gpu_rich_info = koboldcpp_core.get_available_vram_mb(
+        _, _, vram_info_message_str, current_gpu_rich_info = tensortune_core.get_available_vram_mb(
              CONFIG,
              target_gpu_type=CONFIG.get("gpu_selection_mode", "auto") if CONFIG.get("gpu_selection_mode", "auto") != "auto" else None,
              target_gpu_index=CONFIG.get("selected_gpu_index", 0)
@@ -1364,7 +1364,7 @@ def run_model_tuning_session_cli() -> str:
             console.print(Panel(f"{vram_info_message_str}", title="Current GPU Info", style="green" if current_gpu_rich_info.get("success") else "red", expand=False))
         else: print(f"    GPU Status: {vram_info_message_str}")
         
-        print_title("Proposed Command for This OT Level"); print_command(koboldcpp_core.format_command_for_display(display_full_command_list))
+        print_title("Proposed Command for This OT Level"); print_command(tensortune_core.format_command_for_display(display_full_command_list))
         
         menu_options_text = "(L)aunch & Monitor | (S)kip Tune & Launch Now | (G)PU More (↓Lvl) | (C)PU More (↑Lvl) | (E)dit Session Args | (P)ermanent Model Args | (H)istory (This Model) | (N)ew GGUF | (Q)uit Tuning"
         print_title("Tuning Actions"); print(menu_options_text)
@@ -1423,7 +1423,7 @@ def main_cli():
     global KOBOLD_SUCCESS_PATTERN, OOM_ERROR_KEYWORDS
     global gguf_file_global, current_model_analysis_global, last_gguf_directory, last_launched_process_info
 
-    core_init_data = koboldcpp_core.initialize_launcher()
+    core_init_data = tensortune_core.initialize_launcher()
     CONFIG = core_init_data["config"]
 
     KOBOLDCPP_EXECUTABLE = CONFIG["koboldcpp_executable"]
@@ -1437,7 +1437,7 @@ def main_cli():
     OOM_ERROR_KEYWORDS = [k.lower() for k in CONFIG.get("oom_error_keywords", [])]
     last_gguf_directory = CONFIG.get("last_used_gguf_dir", "")
 
-    print_info(f"Using configuration file: {koboldcpp_core.CONFIG_FILE}")
+    print_info(f"Using configuration file: {tensortune_core.CONFIG_FILE}")
     print_info(f"Using database file: {DB_FILE}")
 
     if not core_init_data["initialized"]:
@@ -1477,7 +1477,7 @@ def main_cli():
             print_info(f"KoboldCpp executable '{KOBOLDCPP_EXECUTABLE}' updated via PATH to: {resolved_exe_path}")
             KOBOLDCPP_EXECUTABLE = os.path.abspath(resolved_exe_path)
             CONFIG["koboldcpp_executable"] = KOBOLDCPP_EXECUTABLE
-            koboldcpp_core.save_launcher_config(CONFIG)
+            tensortune_core.save_launcher_config(CONFIG)
         elif KOBOLDCPP_EXECUTABLE.lower().endswith(".py"):
             try:
                 launcher_dir = os.path.dirname(os.path.abspath(__file__)) if not getattr(sys, 'frozen', False) else os.path.dirname(sys.executable)
@@ -1485,7 +1485,7 @@ def main_cli():
                 if os.path.exists(potential_relative_path):
                     KOBOLDCPP_EXECUTABLE = os.path.abspath(potential_relative_path)
                     CONFIG["koboldcpp_executable"] = KOBOLDCPP_EXECUTABLE
-                    koboldcpp_core.save_launcher_config(CONFIG)
+                    tensortune_core.save_launcher_config(CONFIG)
                     print_info(f"Using KoboldCpp Python script found relative to launcher: {KOBOLDCPP_EXECUTABLE}")
                 else:
                     print_error(f"FATAL: KoboldCpp target '{KOBOLDCPP_EXECUTABLE}' not found and not in PATH or relative to launcher. Please check the path."); sys.exit(1)
@@ -1502,7 +1502,7 @@ def main_cli():
             continue
 
         gguf_file_global = gguf_selection_result
-        current_model_analysis_global = koboldcpp_core.analyze_filename(gguf_file_global)
+        current_model_analysis_global = tensortune_core.analyze_filename(gguf_file_global)
         
         tuning_session_outcome = run_model_tuning_session_cli() 
 
@@ -1519,7 +1519,7 @@ if __name__ == "__main__":
         print_warning("PyNVML (for NVIDIA GPU monitoring) is not installed. NVIDIA GPU VRAM info might be limited.")
         print_warning("You can install it with: pip install pynvml")
 
-    koboldcpp_core.atexit.register(koboldcpp_core._cleanup_nvml) # Ensure NVML is shutdown
+    tensortune_core.atexit.register(tensortune_core._cleanup_nvml) # Ensure NVML is shutdown
 
     try:
         main_cli()
@@ -1534,10 +1534,10 @@ if __name__ == "__main__":
         if last_launched_process_info.get("process_obj") and last_launched_process_info["process_obj"].poll() is None:
             if last_launched_process_info.get("pid"):
                 print_info(f"Stopping last directly launched KCPP process (PID: {last_launched_process_info['pid']})...")
-                koboldcpp_core.kill_process(last_launched_process_info["pid"], force=True)
+                tensortune_core.kill_process(last_launched_process_info["pid"], force=True)
 
         if not CONFIG: # If main_cli didn't run enough to populate CONFIG
-            _temp_conf, _, _ = koboldcpp_core.load_config() 
+            _temp_conf, _, _ = tensortune_core.load_config() 
             _kcpp_exe_for_cleanup = _temp_conf.get("koboldcpp_executable", "")
         else:
             _kcpp_exe_for_cleanup = KOBOLDCPP_EXECUTABLE
@@ -1545,7 +1545,7 @@ if __name__ == "__main__":
         if _kcpp_exe_for_cleanup:
             kcpp_exe_basename = os.path.basename(_kcpp_exe_for_cleanup)
             print_info(f"Performing cleanup sweep for processes like '{kcpp_exe_basename}'...")
-            koboldcpp_core.kill_processes_by_name(kcpp_exe_basename)
+            tensortune_core.kill_processes_by_name(kcpp_exe_basename)
             if kcpp_exe_basename.lower().endswith(".py"):
-                 koboldcpp_core.kill_processes_by_name("python", cmdline_substr_filter=kcpp_exe_basename)
+                 tensortune_core.kill_processes_by_name("python", cmdline_substr_filter=kcpp_exe_basename)
         print_info("Launcher exited.")

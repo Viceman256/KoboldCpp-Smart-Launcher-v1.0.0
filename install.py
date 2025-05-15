@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-KoboldCpp Smart Launcher - Installation Script
-This script helps set up the KoboldCpp Smart Launcher by installing 
+TensorTune - Installation Script
+This script helps set up the TensorTune by installing 
 dependencies and checking for required components.
 """
 
@@ -182,7 +182,7 @@ def check_files():
     """Check if all required files are present"""
     print_header("Checking Required Files")
     
-    required_files = ["koboldcpp_core.py", "koboldcpp_launcher.py", "koboldcpp_launcher_gui.py"]
+    required_files = ["tensortune_core.py", "tensortune_cli.py", "tensortune_gui.py"]
     missing_files = []
     
     for file in required_files:
@@ -210,14 +210,14 @@ import sys
 import subprocess
 
 # Run the CLI launcher
-launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "koboldcpp_launcher.py")
+launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tensortune_cli.py")
 subprocess.run([sys.executable, launcher_path])
 """
     else:
         cli_content = """#!/bin/bash
 # Run the CLI launcher
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-python3 "${DIR}/koboldcpp_launcher.py"
+python3 "${DIR}/tensortune_cli.py"
 """
     
     with open(cli_script_name, "w") as f:
@@ -237,14 +237,14 @@ import sys
 import subprocess
 
 # Run the GUI launcher
-launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "koboldcpp_launcher_gui.py")
+launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tensortune_gui.py")
 subprocess.run([sys.executable, launcher_path])
 """
     else:
         gui_content = """#!/bin/bash
 # Run the GUI launcher
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-python3 "${DIR}/koboldcpp_launcher_gui.py"
+python3 "${DIR}/tensortune_gui.py"
 """
     
     with open(gui_script_name, "w") as f:
@@ -260,7 +260,7 @@ python3 "${DIR}/koboldcpp_launcher_gui.py"
 
 def main():
     """Main installation function"""
-    print(f"\n{BOLD}{BLUE}KoboldCpp Smart Launcher - Installation{ENDC}\n")
+    print(f"\n{BOLD}{BLUE}TensorTune - Installation{ENDC}\n")
     
     # Check Python version
     if not check_python_version():
