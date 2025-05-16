@@ -1,4 +1,4 @@
-# TensorTune v1.0.0
+# TensorTune v1.1.0
 
 TensorTune is a user-friendly toolkit for efficiently running KoboldCpp, intelligently managing VRAM usage through optimized tensor offload strategies to maximize performance on consumer GPUs. Available in both GUI and CLI versions.
 
@@ -255,15 +255,16 @@ GUI Example 4 (History Tab)
 
 ![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
 
-## Latest Release: TensorTune v1.0.0
+## Latest Release: TensorTune v1.1.0
 
 Key changes in this version include:
-- Rebranding to TensorTune.
-- Improved configuration management and GPU/VRAM handling.
-- Enhanced auto-tuning heuristics.
-- GUI and CLI updates for better user experience.
+- New "Set as Preferred" tuning strategy feature.
+- Scrollable auto-tuning session page in the GUI.
+- Enhanced GPU detection, error handling, and VRAM display.
+- Numerous bug fixes for CLI and GUI for improved stability and UX.
+- Better KCPP integration and configuration management.
 
-For a full list of changes, see the v1.0.0 Release Notes or the CHANGELOG.md.
+For a full list of changes, see the v1.1.0 Release Notes on GitHub or the CHANGELOG.md.
 
 ## 🤝 Contributing
 

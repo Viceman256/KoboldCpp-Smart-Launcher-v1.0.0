@@ -1,12 +1,51 @@
-# Core dependencies
+# TensorTune v1.1.0 Requirements
+
+# Core GUI dependency
 customtkinter>=5.2.0
 
-# Optional but recommended for full functionality
-psutil>=5.9.0     # System information and process management
-pynvml>=11.5.0    # NVIDIA GPU VRAM monitoring
-rich>=13.4.0      # Improved CLI interface
+# --- Optional but highly recommended for full functionality ---
 
-# Note: tkinter comes with Python, but you need to ensure it's installed
-# On Ubuntu/Debian: sudo apt-get install python3-tk
-# On Fedora: sudo dnf install python3-tkinter
-# On Windows/macOS: Included with official Python installer
+# System information, process management (used by core for CPU threads, process killing)
+psutil>=5.9.0
+
+# NVIDIA GPU VRAM monitoring (used by core)
+# Install if you have an NVIDIA GPU.
+pynvml>=11.5.0
+
+# Enhanced CLI user interface (used by tensortune_cli.py)
+# Recommended for a better CLI experience.
+rich>=13.4.0
+
+# Consistent application directories (used by core if available)
+# Provides better platform-agnostic paths for config/data.
+appdirs>=1.4.4
+
+# --- Platform-Specific for Advanced GPU Info (Install manually if needed) ---
+# These are used by tensortune_core.py for more detailed GPU information on specific platforms.
+# TensorTune will attempt to use them if installed but can function without them
+# (though GPU info might be limited for the respective vendors).
+
+# For AMD GPUs on Windows (detailed VRAM & listing):
+# May require AMD Adrenalin Software with the ADLX SDK components.
+# Consider installing if you have an AMD GPU on Windows and need precise info.
+# Example pip install (might vary): pip install pyadlx
+
+# For Windows Management Instrumentation (fallback GPU info on Windows):
+# Generally available on Windows, but this library provides a Python interface.
+# Install if other methods fail or for general WMI access.
+# pip install wmi
+
+# For Intel GPUs using Level Zero API (detailed VRAM & listing):
+# May require Intel drivers and the Level Zero runtime.
+# Package name is often 'pyze-l0'.
+# pip install pyze-l0
+
+# Metal bindings for macOS are typically part of the system Python or an environment
+# that supports Metal development. Not usually a separate pip install.
+
+# --- Notes ---
+# tkinter: Comes with most Python installations. If missing (especially on Linux),
+# install it via your system's package manager.
+#   - Ubuntu/Debian: sudo apt-get install python3-tk
+#   - Fedora: sudo dnf install python3-tkinter
+#   - Windows/macOS: Usually included with the official Python installer from python.org.
