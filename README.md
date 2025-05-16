@@ -15,7 +15,7 @@ Here are some real-world examples of performance improvements using tensor offlo
 ### Example 1: QwQ Merge on 12GB VRAM GPU
 
 **Traditional Layer Offloading:**
-```bash
+
 python koboldcpp.py --threads 6 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 59 --quantkv 1
 
 
@@ -24,12 +24,6 @@ Tokens per second: 3.95 t/s
 With TensorTune's Smart Tensor Offloading:
 
 python koboldcpp.py --threads 10 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 65 --quantkv 1 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU"
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 10.61 t/s
 
@@ -41,12 +35,6 @@ Traditional Layer Offloading:
 
 # Offloading 30 layers
 python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 30
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 10 t/s
 
@@ -54,12 +42,7 @@ With TensorTune's Smart Tensor Offloading:
 
 # All layers on GPU with tensor offloading
 python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 99 --overridetensors "blk\.([0-9]*[02468])\.ffn_.*_exps\.=CPU"
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 
 Tokens per second: 15 t/s
 
@@ -71,12 +54,6 @@ Traditional Layer Offloading:
 
 # Baseline with 46 layers offloaded
 python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 46
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 6.86 t/s
 
@@ -84,12 +61,6 @@ With TensorTune's Smart Tensor Offloading:
 
 # All layers on GPU with selective tensor offloading
 python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 99 --overridetensors "\.(5[3-9]|6[0-3])\.(ffn_*)=CPU"
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 10.4 t/s
 
@@ -101,12 +72,6 @@ Traditional Layer Offloading:
 
 # Standard approach
 python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 2.9 t/s
 
@@ -114,12 +79,6 @@ With TensorTune's Smart Tensor Offloading:
 
 # Using tensor-specific offloading
 python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95 --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Tokens per second: 4.2 t/s
 
@@ -154,22 +113,10 @@ Download or clone this repository:
 
 git clone https://github.com/Viceman256/TensorTune.git
 cd TensorTune
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Run the installation script:
 
 python tensortune_install.py
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 The script will:
 
@@ -188,12 +135,6 @@ If you prefer to install manually:
 Install required dependencies:
 
 pip install -r requirements.txt
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
 
 Ensure all core files are in the same directory:
 
@@ -216,12 +157,7 @@ python tensortune_gui.py
 
 # For CLI
 python tensortune_cli.py
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 📚 Using TensorTune
 
 TensorTune automatically creates and manages its configuration files and history database in your user-specific application data/configuration directory (e.g., ~/.config/TensorTune on Linux, AppData/Roaming/TensorTune on Windows).
@@ -371,9 +307,3 @@ For a full list of changes, see the v1.0.0 Release Notes or the CHANGELOG.md.
 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-IGNORE_WHEN_COPYING_END
