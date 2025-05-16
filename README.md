@@ -249,11 +249,11 @@ GUI Example 2 (Tuning Session)
 
 GUI Example 3 (Settings Tab)
 
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI3.png)
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
 
 GUI Example 4 (History Tab)
 
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
+![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI6.png)
 
 ## Latest Release: TensorTune v1.1.0
 
