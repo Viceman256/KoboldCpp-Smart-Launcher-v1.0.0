@@ -194,6 +194,22 @@ class KoboldLauncherGUI(ctk.CTk):
             self.log_to_console(
                 f"KCPP Caps: CUDA:{cuda_support}, ROCm:{rocm_support}, FlashAttn:{flash_attn_support}"
             )
+            lib_errors_to_log = {
+            "PyNVML (NVIDIA)": tensortune_core.pynvml_load_error_reason,
+            "PyADLX (AMD)": tensortune_core.pyadlx_load_error_reason, # This will now be the detailed one
+            "WMI (Windows)": tensortune_core.wmi_load_error_reason,
+            "Psutil": tensortune_core.psutil_load_error_reason,
+            "PyZE (Intel)": tensortune_core.pyze_load_error_reason,
+            "Metal (Apple)": tensortune_core.metal_load_error_reason,
+            "Appdirs": tensortune_core.appdirs_load_error_reason,
+        }
+        for lib_name, error_reason in lib_errors_to_log.items():
+            if error_reason:
+                # Using the refined log_to_console if you implemented it
+                log_level_gui = "WARNING" # Default for optional libraries
+                # You can add more nuanced logic for log_level_gui if needed
+                # e.g., if "failed to load" and not just "not found", maybe "ERROR"
+                self.log_to_console(f"Library Status - {lib_name}: {error_reason}", level=log_level_gui)
 
         self.check_koboldcpp_executable()
         self._show_model_selection_view()
@@ -201,7 +217,7 @@ class KoboldLauncherGUI(ctk.CTk):
         self.after(200, self._populate_gpu_id_dropdown_on_startup)
 
         self.update_save_button_state()
-        
+
         # Register the close handler
         self.protocol("WM_DELETE_WINDOW", self._on_gui_close_requested)
 
@@ -2870,19 +2886,30 @@ class KoboldLauncherGUI(ctk.CTk):
         self.mark_settings_dirty() # Theme change is a setting
         self.log_to_console(f"UI Theme changed to: {theme_name}.")
 
-    def log_to_console(self, text_message: str):
+    def log_to_console(self, text_message: str, level: str = "INFO"): # ADDED 'level' parameter
         def _perform_log():
             if hasattr(self, 'console') and self.console.winfo_exists():
                 self.console.configure(state="normal")
-                timestamp = time.strftime("%H:%M:%S")
-                self.console.insert("end", f"[{timestamp}] {text_message}\n")
-                self.console.see("end") # Scroll to the end
+                timestamp = time.strftime("%H:%M:%S") # Make sure 'time' module is imported
+                
+                level_upper = level.upper()
+                # For simplicity, just prepending the level string.
+                # For actual colors in CTkTextbox, you'd use its tag system which is more involved.
+                prefix = f"[{timestamp}] [{level_upper}] "
+                
+                self.console.insert("end", f"{prefix}{text_message}\n")
+                self.console.see("end")
                 self.console.configure(state="disabled")
         
-        if hasattr(self, 'after'): # If in GUI context
-            self.after(0, _perform_log) # Schedule for main thread
-        else: # Fallback if GUI not fully up or in other threads without 'after'
-            print(f"LOG: {text_message}")
+        if hasattr(self, 'after') and self.winfo_exists(): # Check if GUI window still exists
+            try:
+                self.after(0, _perform_log)
+            except RuntimeError: # Can happen if window is being destroyed
+                print(f"LOG [{level.upper()}]: {text_message}") # Fallback
+        else:
+            # This case handles if self.after is not available (e.g., called very early or from non-GUI thread)
+            # or if self.winfo_exists() is false (window destroyed)
+            print(f"LOG [{level.upper()}]: {text_message}")
 
     def browse_model(self):
         initial_dir_for_dialog = self.config.get("last_used_gguf_dir") or \

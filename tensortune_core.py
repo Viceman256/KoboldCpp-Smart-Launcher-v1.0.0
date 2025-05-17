@@ -116,7 +116,8 @@ DEFAULT_CONFIG_TEMPLATE = {
     "selected_gpu_index": 0,
     "override_vram_budget": False,
     "manual_vram_total_mb": 8192,
-    "launcher_core_version": CORE_VERSION
+    "launcher_core_version": CORE_VERSION, # Ensure CORE_VERSION is defined, e.g., "1.1.0-TT"
+    "suppress_optional_lib_warnings": False # <-- NEW FLAG
 }
 
 KOBOLDCPP_ARG_DEFINITIONS = [
@@ -176,32 +177,63 @@ except Exception as e_psutil:
 
 if sys.platform == "win32":
     try:
-        import pyadlx
+        import pyadlx # Attempt to import the manually built PyADLX bindings
         if hasattr(pyadlx, 'ADLXHelper'):
             try:
-                helper = pyadlx.ADLXHelper() # This can raise if ADLX is not properly installed/drivers missing
+                # This tests if the ADLX SDK is properly installed and accessible
+                # via the PyADLX bindings.
+                helper = pyadlx.ADLXHelper()
                 pyadlx_available = True
                 del helper
-            except Exception as e_adlx_init: # Catch pyadlx.ADLXNotFoundException or other init issues
-                pyadlx_load_error_reason = f"PyADLX (AMD) helper initialization failed: {e_adlx_init}. Ensure AMD drivers and ADLX SDK are correctly installed."
+            except Exception as e_adlx_init: # Catches ADLXNotFoundException or other ADLX init issues
+                pyadlx_available = False
+                pyadlx_load_error_reason = (
+                    f"PyADLX (AMD) bindings found, but ADLX system helper failed to initialize: {e_adlx_init}. "
+                    "This usually means the AMD Adrenalin software (which includes ADLX SDK components) is not fully installed or there's a driver/SDK mismatch. "
+                    "TensorTune will use WMI for AMD GPU info instead. "
+                    "For advanced users wanting full PyADLX support, ensure Adrenalin is installed and see 'PYADLX_SETUP_GUIDE.md' (distributed with TensorTune or in its documentation) for PyADLX setup details."
+                )
         else:
-             pyadlx_load_error_reason = "PyADLX (AMD) found, but ADLXHelper is missing (corrupt/old install?)."
+            pyadlx_available = False
+            pyadlx_load_error_reason = (
+                "PyADLX (AMD) Python bindings found, but 'ADLXHelper' is missing. "
+                "This suggests an incomplete or corrupted PyADLX manual build. "
+                "TensorTune will use WMI for AMD GPU info. "
+                "See 'PYADLX_SETUP_GUIDE.md' (distributed with TensorTune or in its documentation) for PyADLX build instructions."
+            )
     except ImportError:
-        pyadlx_load_error_reason = "PyADLX (AMD) library not found. Required for detailed AMD GPU info on Windows."
-    except Exception as e_adlx_load:
-        pyadlx_load_error_reason = f"PyADLX (AMD) library failed to load: {e_adlx_load}."
+        pyadlx_available = False
+        pyadlx_load_error_reason = (
+            "PyADLX (AMD) Python library not found. This optional library provides detailed AMD GPU information on Windows. "
+            "It requires manual setup: AMD Adrenalin software must be installed, and then Python bindings for the ADLX SDK must be manually built. "
+            "TensorTune will use WMI for AMD GPU info instead. "
+            "For advanced users, see 'PYADLX_SETUP_GUIDE.md' (distributed with TensorTune or in its documentation) for instructions."
+        )
+    except Exception as e_adlx_load: # Catch any other unexpected error during pyadlx import/initialization
+        pyadlx_available = False
+        pyadlx_load_error_reason = (
+            f"PyADLX (AMD) library failed to load unexpectedly: {type(e_adlx_load).__name__}: {e_adlx_load}. "
+            "TensorTune will use WMI for AMD GPU info. "
+            "Ensure AMD Adrenalin software is installed. For advanced PyADLX setup, see 'PYADLX_SETUP_GUIDE.md' (distributed with TensorTune or in its documentation)."
+        )
 
+    # WMI (as before)
     try:
         import wmi
         try:
             wmi.WMI() # Test basic WMI functionality
             wmi_available = True
         except Exception as e_wmi_init:
-            wmi_load_error_reason = f"WMI (Windows) initialization failed: {e_wmi_init}. WMI may be corrupted."
+            wmi_load_error_reason = (f"WMI (Windows) initialization failed: {e_wmi_init}. "
+                                     "WMI may be corrupted on your system. See 'WMI_SETUP_GUIDE.md' for troubleshooting tips.")
     except ImportError:
-        wmi_load_error_reason = "WMI (Windows) library not found. Install with: pip install wmi"
+        wmi_load_error_reason = ("WMI (Windows) Python library not found. "
+                                 "This library is used as a fallback for system/GPU info. Install with: pip install WMI. "
+                                 "See 'WMI_SETUP_GUIDE.md' for details.")
     except Exception as e_wmi_load:
-        wmi_load_error_reason = f"WMI (Windows) library failed to load: {e_wmi_load}."
+        wmi_load_error_reason = (f"WMI (Windows) Python library failed to load: {e_wmi_load}. "
+                                 "See 'WMI_SETUP_GUIDE.md' for troubleshooting.")
+
 
 
 try:
@@ -211,15 +243,23 @@ try:
             if pyze_api.zeInit(0) == pyze_api.ZE_RESULT_SUCCESS:
                 pyze_available = True
             else:
-                pyze_load_error_reason = "PyZE (Intel Level Zero) zeInit call failed. Ensure Intel drivers and Level Zero runtime are correctly installed."
+                pyze_load_error_reason = ("PyZE (Intel Level Zero) zeInit call failed. "
+                                          "Ensure Intel drivers and Level Zero runtime are correctly installed. "
+                                          "See 'PYZE_SETUP_GUIDE.md' for details.")
         except Exception as e_pyze_init:
-            pyze_load_error_reason = f"PyZE (Intel Level Zero) initialization error: {e_pyze_init}."
+            pyze_load_error_reason = (f"PyZE (Intel Level Zero) initialization error: {e_pyze_init}. "
+                                      "See 'PYZE_SETUP_GUIDE.md' for troubleshooting.")
     else:
-        pyze_load_error_reason = "PyZE (Intel Level Zero) found, but essential functions are missing (corrupt/old install?)."
+        pyze_load_error_reason = ("PyZE (Intel Level Zero) found, but essential functions are missing. "
+                                  "This may indicate a corrupt or old install. Try reinstalling 'pyze-l0'. "
+                                  "See 'PYZE_SETUP_GUIDE.md' for details.")
 except ImportError:
-    pyze_load_error_reason = "PyZE (Intel Level Zero) library not found. Required for Intel GPU info."
+    pyze_load_error_reason = ("PyZE (Intel Level Zero) library not found. "
+                              "This optional library is required for detailed Intel GPU info. Install with: pip install pyze-l0. "
+                              "See 'PYZE_SETUP_GUIDE.md' for more information.")
 except Exception as e_pyze_load:
-    pyze_load_error_reason = f"PyZE (Intel Level Zero) library failed to load: {e_pyze_load}."
+    pyze_load_error_reason = (f"PyZE (Intel Level Zero) library failed to load: {e_pyze_load}. "
+                              "See 'PYZE_SETUP_GUIDE.md' for troubleshooting.")
 
 
 if sys.platform == "darwin":

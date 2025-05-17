@@ -23,12 +23,18 @@ rich>=13.4.0
 # pip install appdirs
 appdirs>=1.4.4
 
+# --- Optional but highly recommended for full functionality ---
+psutil>=5.9.0     # System information and process management
+pynvml>=11.5.0    # NVIDIA GPU VRAM monitoring (for NVIDIA GPUs)
+rich>=13.4.0      # Improved CLI interface
+appdirs>=1.4.4    # For consistent user-specific config/data paths
+
 # --- Platform-Specific for Advanced GPU Info (Install manually if needed) ---
 # TensorTune attempts to use these for more detailed GPU information if available.
 
 # For Windows systems (fallback GPU info, general system info)
 # pip install WMI
-wmi>=1.5.1
+WMI>=1.5.1 ; sys_platform == 'win32'
 
 # For AMD GPUs on Windows (provides detailed VRAM & listing if ADLX SDK is present):
 # PyADLX is NOT a standard pip package. It requires manual building against the
@@ -39,7 +45,7 @@ wmi>=1.5.1
 # For Intel GPUs using Level Zero API (detailed VRAM & listing):
 # May require Intel drivers and the Level Zero runtime to be installed first.
 # pip install pyze-l0
-# pyze-l0>=0.1.0
+# pyze-l0>=0.1.0 # Uncomment to have pip attempt to install
 
 
 # --- Notes ---

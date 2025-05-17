@@ -255,6 +255,13 @@ def main():
 
   TensorTune's "Auto-Tune" feature will guide you through finding an optimal
   tensor offload strategy by adjusting GPU layers and --overridetensors patterns.""")
+  
+    For advanced GPU monitoring setup (optional), refer to:
+  - PYADLX_SETUP_GUIDE.md (for AMD on Windows)
+  - PYZE_SETUP_GUIDE.md (for Intel Arc/Xe)
+  - WMI_SETUP_GUIDE.md (for Windows general)""")
+  
+
 
 if __name__ == "__main__":
     # A simple check for shutil for lspci existence check

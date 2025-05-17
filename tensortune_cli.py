@@ -107,28 +107,26 @@ LAUNCHER_CLI_VERSION = "1.1.1 (CLI - TensorTune)"
 # --- Runtime State Variables ---
 last_gguf_directory = "" 
 last_launched_process_info: Dict[str, Any] = {"pid": None, "process_obj": None, "command_list": []}
-gguf_file_global = ""
-current_model_analysis_global: Dict[str, Any] = {}
+gguf_file_global = "" # For model selected in main menu
+current_model_analysis_global: Dict[str, Any] = {} # For model selected in main menu
 
+# Tuning-specific state
 tuning_in_progress = False
 current_tuning_attempt_level = 0
 current_tuning_min_level = 0
 current_tuning_max_level = 0
 current_tuning_session_base_args: Dict[str, Any] = {} 
-current_tuning_model_path_local = ""
-current_tuning_model_analysis_local: Dict[str, Any] = {}
-last_proposed_command_list_for_db: List[str] = []
-vram_at_decision_for_db: Optional[float] = None 
-last_approx_vram_used_kcpp_mb: Optional[float] = None
-last_successful_monitored_run_details_cli: Optional[Dict[str, Any]] = None
+current_tuning_model_path_local = "" # Specific to current tuning session
+current_tuning_model_analysis_local: Dict[str, Any] = {} # Specific to current tuning session
+last_successful_monitored_run_details_cli: Optional[Dict[str, Any]] = None # For UI feedback in tuning
 
+# KCPP Monitoring state (used by tuning)
 kcpp_monitor_thread: Optional[threading.Thread] = None
 kcpp_process_obj: Optional[subprocess.Popen] = None
 kcpp_success_event = threading.Event()
 kcpp_oom_event = threading.Event()
 kcpp_output_lines_shared: List[str] = []
 monitor_start_time: float = 0.0
-level_of_last_monitored_run = 0
 user_requested_stop_monitoring_cli = False
 
 
@@ -416,6 +414,7 @@ def manage_launcher_settings_cli():
             "6": "VRAM Override Settings",
             "7": "GPU Detection Preferences",
             "8": "Use Graphical File Dialog (CLI)",
+            "w": "Toggle Optional Library Startup Warnings",
             "k": "View/Re-detect KoboldCpp Capabilities",
             "gda": "Edit Global KoboldCpp Default Arguments",
             "msa": "Manage Model-Specific Arguments",
@@ -427,6 +426,11 @@ def manage_launcher_settings_cli():
         print("\nSettings Menu:")
         for k, v in settings_options.items(): print(f"  ({k}) {v}")
         
+        current_suppress_status = "DISABLED (will show warnings)"
+        if CONFIG.get("suppress_optional_lib_warnings", False):
+            current_suppress_status = "ENABLED (warnings hidden after first run)"
+        print_info(f"Current startup library warning suppression: {current_suppress_status}")
+
         choice = prompt("Choose an option", choices=list(settings_options.keys()), default="b").lower()
 
         if choice == 'b': break
@@ -550,6 +554,15 @@ def manage_launcher_settings_cli():
                 CONFIG["cli_use_tkinter_dialog"] = False 
                 print_warning("Tkinter (for graphical dialogs) not found. Preference set to False.")
         
+        elif choice == 'w':
+            current_setting = CONFIG.get("suppress_optional_lib_warnings", False)
+            new_setting = confirm("Suppress optional library warnings on startup (after first run)?", default=not current_setting)
+            CONFIG["suppress_optional_lib_warnings"] = new_setting
+            if new_setting:
+                print_success("Optional library warnings will be suppressed on subsequent startups.")
+            else:
+                print_success("Optional library warnings will be shown on startup.")
+                
         elif choice == 'k':
             _display_kcpp_capabilities_cli()
             if confirm("Re-detect KCPP capabilities now?", default=False):
@@ -627,13 +640,14 @@ def manage_launcher_settings_cli():
                 print_success(f"Configuration reset to defaults. {load_msg}")
                 print_warning("You may need to run the first-time setup prompts again if paths changed.")
 
-        if choice not in ['i', 'r']: 
+        if choice not in ['i', 'r', 'b']: # 'b' doesn't change settings
             save_ok, save_message = tensortune_core.save_launcher_config(CONFIG)
             if not save_ok: print_error(f"Failed to save settings: {save_message}")
             else:
-                if choice != 'b': print_info("Settings saved.")
+                if choice != 'k': # 'k' view doesn't change settings unless re-detect modifies flags
+                    print_info("Settings saved.")
         _update_cli_globals_from_config() 
-        print("-" * 30)
+        print("-" * 30)     
 
 
 def manage_model_specific_args_cli():
@@ -1015,38 +1029,47 @@ def monitor_kcpp_output_thread_target_cli(
 
 
 def launch_and_monitor_for_tuning_cli():
-    global kcpp_process_obj, kcpp_monitor_thread, monitor_start_time
-    global last_proposed_command_list_for_db, vram_at_decision_for_db, last_approx_vram_used_kcpp_mb
-    global level_of_last_monitored_run, last_successful_monitored_run_details_cli
-    global user_requested_stop_monitoring_cli
+    global kcpp_process_obj, kcpp_monitor_thread, monitor_start_time # Uses these globals for process mgmt
+    global current_tuning_attempt_level, current_tuning_model_analysis_local, current_tuning_model_path_local # Uses these tuning globals
+    global current_tuning_session_base_args, last_successful_monitored_run_details_cli
+    global user_requested_stop_monitoring_cli # This flag is global for the monitor thread to see
+
+    # --- Local variables for this specific monitoring attempt ---
+    local_vram_at_decision_for_db: Optional[float] = None
+    local_last_approx_vram_used_kcpp_mb: Optional[float] = None
+    local_level_of_last_monitored_run = current_tuning_attempt_level # Capture current level for this run
+    local_last_proposed_command_list_for_db: List[str] = []
+    # --- End of local variables ---
 
     if kcpp_process_obj and kcpp_process_obj.poll() is None:
         print_warning("A KoboldCpp process is already being monitored. Please stop it first or wait.")
-        return "continue_tuning"
+        return "continue_tuning" # Or some other appropriate return to stay in tuning menu
 
-    print_info(f"Tuning: Launching & Monitoring for OT Level {current_tuning_attempt_level}")
+    print_info(f"Tuning: Launching & Monitoring for OT Level {local_level_of_last_monitored_run}")
     user_requested_stop_monitoring_cli = False 
     kcpp_success_event.clear(); kcpp_oom_event.clear(); kcpp_output_lines_shared.clear()
-    last_approx_vram_used_kcpp_mb = None 
-    level_of_last_monitored_run = current_tuning_attempt_level
 
-    ot_string_for_launch = tensortune_core.generate_overridetensors(current_tuning_model_analysis_local, current_tuning_attempt_level)
+    ot_string_for_launch = tensortune_core.generate_overridetensors(current_tuning_model_analysis_local, local_level_of_last_monitored_run)
     args_for_kcpp_run_list = tensortune_core.build_command(
         current_tuning_model_path_local, ot_string_for_launch,
         current_tuning_model_analysis_local, current_tuning_session_base_args,
-        current_attempt_level_for_tuning=current_tuning_attempt_level 
+        current_attempt_level_for_tuning=local_level_of_last_monitored_run
     )
-    last_proposed_command_list_for_db = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_run_list)
+    local_last_proposed_command_list_for_db = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_run_list)
     
     _, _, _, gpu_info_rich_before_launch = tensortune_core.get_available_vram_mb(CONFIG)
-    vram_at_decision_for_db = gpu_info_rich_before_launch.get("free_mb", 0.0) 
+    local_vram_at_decision_for_db = gpu_info_rich_before_launch.get("free_mb", 0.0) 
 
-    kcpp_process_obj, launch_error_msg = tensortune_core.launch_process( last_proposed_command_list_for_db, capture_output=True, new_console=False, use_text_mode=False)
+    kcpp_process_obj, launch_error_msg = tensortune_core.launch_process( local_last_proposed_command_list_for_db, capture_output=True, new_console=False, use_text_mode=False)
 
     if launch_error_msg or not kcpp_process_obj:
         print_error(f"Failed to launch KCPP for monitoring: {launch_error_msg or 'Unknown error'}")
-        tensortune_core.save_config_to_db( DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, "LAUNCH_FAILED_SETUP_CLI", None)
-        return "continue_tuning"
+        tensortune_core.save_config_to_db(
+            DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
+            local_vram_at_decision_for_db, local_last_proposed_command_list_for_db,
+            local_level_of_last_monitored_run, "LAUNCH_FAILED_SETUP_CLI", None
+        )
+        return "continue_tuning" # Stay in tuning menu
 
     print_info(f"KoboldCpp process started (PID: {kcpp_process_obj.pid}). Monitoring output...")
     effective_args_for_port_check = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
@@ -1055,8 +1078,11 @@ def launch_and_monitor_for_tuning_cli():
     final_outcome_key_from_monitor = "UNKNOWN_EXIT_CLI" 
     monitor_thread_args = ( kcpp_process_obj, kcpp_success_event, kcpp_oom_event, kcpp_output_lines_shared, KOBOLD_SUCCESS_PATTERN, OOM_ERROR_KEYWORDS, target_port_str_for_success, console if dependencies['rich']['module'] else None)
 
+    # --- Monitoring loop (Rich or plain) as before ---
     if dependencies['rich']['module']:
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TaskProgressColumn(), TimeRemainingColumn(), console=console, transient=False) as progress_live_display:
+        with Progress(...) as progress_live_display: # Your existing Rich progress
+            # ... (existing Rich monitoring loop) ...
+            # Ensure it sets final_outcome_key_from_monitor
             loading_task_id = progress_live_display.add_task("KCPP Loading...", total=float(LOADING_TIMEOUT_SECONDS))
             kcpp_monitor_thread = threading.Thread(target=monitor_kcpp_output_thread_target_cli, args=monitor_thread_args, daemon=True)
             kcpp_monitor_thread.start()
@@ -1070,10 +1096,12 @@ def launch_and_monitor_for_tuning_cli():
                     if kcpp_success_event.is_set(): final_outcome_key_from_monitor = "SUCCESS_LOAD_DETECTED_CLI"; break
                     if kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "OOM_CRASH_DETECTED_CLI"; break
                     if process_has_exited and not kcpp_success_event.is_set() and not kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "PREMATURE_EXIT_CLI"; break
-                    if elapsed_monitor_time > LOADING_TIMEOUT_SECONDS: final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"; break
+                    if elapsed_monitor_time > float(LOADING_TIMEOUT_SECONDS): final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"; break
                     time.sleep(0.25)
-            except KeyboardInterrupt: user_requested_stop_monitoring_cli = True; final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; raise
+            except KeyboardInterrupt: user_requested_stop_monitoring_cli = True; final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; print_warning("\nMonitoring interrupted by user."); raise # Re-raise to be caught by main try-except
     else: # No Rich
+        # ... (existing plain monitoring loop) ...
+        # Ensure it sets final_outcome_key_from_monitor
         kcpp_monitor_thread = threading.Thread(target=monitor_kcpp_output_thread_target_cli, args=monitor_thread_args, daemon=True)
         kcpp_monitor_thread.start()
         monitor_start_time = time.monotonic()
@@ -1087,21 +1115,22 @@ def launch_and_monitor_for_tuning_cli():
                 if kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "OOM_CRASH_DETECTED_CLI"; break
                 if process_has_exited and not kcpp_success_event.is_set() and not kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "PREMATURE_EXIT_CLI"; break
                 elapsed_monitor_time = time.monotonic() - monitor_start_time
-                if elapsed_monitor_time > LOADING_TIMEOUT_SECONDS: final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"; break
+                if elapsed_monitor_time > float(LOADING_TIMEOUT_SECONDS): final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"; break
                 time.sleep(0.25)
                 idx = (idx + 1) % len(spinner_chars)
                 sys.stdout.write(f"\rKCPP Loading... {spinner_chars[idx]} ({elapsed_monitor_time:.1f}s / {LOADING_TIMEOUT_SECONDS}s)   ")
                 sys.stdout.flush()
-        except KeyboardInterrupt: user_requested_stop_monitoring_cli = True; final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; raise
+        except KeyboardInterrupt: user_requested_stop_monitoring_cli = True; final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; print_warning("\nMonitoring interrupted by user."); raise
         finally:
             if not dependencies['rich']['module']: sys.stdout.write("\r" + " " * 80 + "\r"); sys.stdout.flush()
+    # --- End of Monitoring loop ---
 
     print_info(f"Monitoring completed. Initial Outcome: {final_outcome_key_from_monitor}")
     if final_outcome_key_from_monitor in ["TIMEOUT_NO_SIGNAL_CLI", "OOM_CRASH_DETECTED_CLI", "PREMATURE_EXIT_CLI", "USER_STOPPED_MONITORING_CLI"] or "OOM" in final_outcome_key_from_monitor.upper() or "CRASH" in final_outcome_key_from_monitor.upper():
         if kcpp_process_obj and kcpp_process_obj.poll() is None:
             print_info("Terminating KCPP process due to unfavorable outcome or user stop...")
             tensortune_core.kill_process(kcpp_process_obj.pid, force=True)
-        kcpp_process_obj = None
+        kcpp_process_obj = None # Clear the global process object
 
     db_outcome_to_save_str = final_outcome_key_from_monitor
     if final_outcome_key_from_monitor == "SUCCESS_LOAD_DETECTED_CLI":
@@ -1113,10 +1142,10 @@ def launch_and_monitor_for_tuning_cli():
         actual_hw_free_vram_after_load = gpu_info_rich_after_load.get("free_mb", 0.0)
         actual_hw_total_vram_after_load = gpu_info_rich_after_load.get("total_mb", 0.0)
 
-        if actual_hw_total_vram_after_load > 0 and vram_at_decision_for_db is not None and actual_hw_free_vram_after_load is not None :
-            vram_used_by_kcpp_actual_hw = vram_at_decision_for_db - actual_hw_free_vram_after_load
-            last_approx_vram_used_kcpp_mb = max(0, min(vram_used_by_kcpp_actual_hw, actual_hw_total_vram_after_load))
-            print_info(f"Budgeted VRAM after load: {budgeted_free_vram_after_load:.0f}MB free. Approx Actual KCPP VRAM usage: {last_approx_vram_used_kcpp_mb:.0f}MB")
+        if actual_hw_total_vram_after_load > 0 and local_vram_at_decision_for_db is not None and actual_hw_free_vram_after_load is not None :
+            vram_used_by_kcpp_actual_hw = local_vram_at_decision_for_db - actual_hw_free_vram_after_load
+            local_last_approx_vram_used_kcpp_mb = max(0, min(vram_used_by_kcpp_actual_hw, actual_hw_total_vram_after_load)) # Store locally
+            print_info(f"Budgeted VRAM after load: {budgeted_free_vram_after_load:.0f}MB free. Approx Actual KCPP VRAM usage: {local_last_approx_vram_used_kcpp_mb:.0f}MB")
             
             if budgeted_free_vram_after_load < MIN_VRAM_FREE_AFTER_LOAD_MB:
                 print_warning(f"Budgeted VRAM tight! {budgeted_free_vram_after_load:.0f}MB < {MIN_VRAM_FREE_AFTER_LOAD_MB}MB target.")
@@ -1125,30 +1154,53 @@ def launch_and_monitor_for_tuning_cli():
                 print_success("Budgeted VRAM usage OK.")
                 db_outcome_to_save_str = "SUCCESS_LOAD_VRAM_OK_CLI"
             
-            if gpu_info_rich_after_load.get("override_active", False) and last_approx_vram_used_kcpp_mb > gpu_info_rich_after_load.get("total_mb_budgeted", 0):
-                print_warning(f"NOTE: Actual KCPP VRAM usage ({last_approx_vram_used_kcpp_mb:.0f}MB) exceeded manual VRAM budget ({gpu_info_rich_after_load.get('total_mb_budgeted', 0):.0f}MB).")
-            last_successful_monitored_run_details_cli = { "level": level_of_last_monitored_run, "outcome": db_outcome_to_save_str, "vram_used_mb": f"{last_approx_vram_used_kcpp_mb:.0f}" if last_approx_vram_used_kcpp_mb is not None else "N/A" }
+            if gpu_info_rich_after_load.get("override_active", False) and local_last_approx_vram_used_kcpp_mb is not None and local_last_approx_vram_used_kcpp_mb > gpu_info_rich_after_load.get("total_mb_budgeted", 0):
+                print_warning(f"NOTE: Actual KCPP VRAM usage ({local_last_approx_vram_used_kcpp_mb:.0f}MB) exceeded manual VRAM budget ({gpu_info_rich_after_load.get('total_mb_budgeted', 0):.0f}MB).")
+            last_successful_monitored_run_details_cli = { "level": local_level_of_last_monitored_run, "outcome": db_outcome_to_save_str, "vram_used_mb": f"{local_last_approx_vram_used_kcpp_mb:.0f}" if local_last_approx_vram_used_kcpp_mb is not None else "N/A" }
         else:
             db_outcome_to_save_str = "SUCCESS_LOAD_NO_VRAM_CHECK_CLI"
-            last_successful_monitored_run_details_cli = { "level": level_of_last_monitored_run, "outcome": db_outcome_to_save_str, "vram_used_mb": "N/A"}
+            last_successful_monitored_run_details_cli = { "level": local_level_of_last_monitored_run, "outcome": db_outcome_to_save_str, "vram_used_mb": "N/A"}
 
-    tensortune_core.save_config_to_db( DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, db_outcome_to_save_str,  last_approx_vram_used_kcpp_mb )
-    return handle_post_monitoring_choices_cli(db_outcome_to_save_str, kcpp_process_obj)
+    tensortune_core.save_config_to_db(
+        DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
+        local_vram_at_decision_for_db, local_last_proposed_command_list_for_db,
+        local_level_of_last_monitored_run, db_outcome_to_save_str,
+        local_last_approx_vram_used_kcpp_mb # Pass the locally calculated value
+    )
+    # Pass the local VRAM info and command list to the post-monitoring choices
+    return handle_post_monitoring_choices_cli(
+        db_outcome_to_save_str,
+        kcpp_process_obj, # Pass the current kcpp_process_obj (might be None if it exited)
+        local_vram_at_decision_for_db,
+        local_last_approx_vram_used_kcpp_mb,
+        local_level_of_last_monitored_run,
+        local_last_proposed_command_list_for_db
+    )
 
 
-def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp_instance: Optional[subprocess.Popen]):
-    global current_tuning_attempt_level, tuning_in_progress, kcpp_process_obj
-    global last_launched_process_info, level_of_last_monitored_run
+def handle_post_monitoring_choices_cli(
+    outcome_from_monitor: str,
+    monitored_kcpp_instance: Optional[subprocess.Popen],
+    # ADDED PARAMETERS from the monitoring session:
+    vram_at_decision_from_monitor: Optional[float],
+    approx_vram_used_from_monitor: Optional[float],
+    level_from_monitor: int,
+    command_list_from_monitor: List[str]
+):
+    global current_tuning_attempt_level, tuning_in_progress, kcpp_process_obj # kcpp_process_obj is the monitored one
+    global last_launched_process_info # For non-monitored KCPP instance
+    # level_of_last_monitored_run is now level_from_monitor
 
-    kcpp_process_obj = monitored_kcpp_instance 
+    kcpp_process_obj = monitored_kcpp_instance # Keep track of the process passed from monitor
     choices_dict = {}; default_choice_key = ""
     print_title("Post-Monitoring Options")
-    print_info(f"Outcome of monitored launch: {outcome_from_monitor}")
-    if last_approx_vram_used_kcpp_mb is not None:
-        print_info(f"Approx. Actual KCPP VRAM Used: {last_approx_vram_used_kcpp_mb:.0f} MB")
+    print_info(f"Outcome of monitored launch (Level {level_from_monitor}): {outcome_from_monitor}")
+    if approx_vram_used_from_monitor is not None:
+        print_info(f"Approx. Actual KCPP VRAM Used by monitored run: {approx_vram_used_from_monitor:.0f} MB")
     
     kcpp_is_still_running = kcpp_process_obj and kcpp_process_obj.poll() is None
 
+    # --- Logic for choices_dict and default_choice_key as before ---
     if "SUCCESS_LOAD_VRAM_OK" in outcome_from_monitor:
         print_success("KCPP loaded successfully (Budgeted VRAM OK).")
         choices_dict = { "u": "✅ Accept & Use this KCPP instance", "s": "💾 Save as Good, Auto-Adjust for More GPU & Continue Tuning", "g": "⚙️ Manually Try More GPU (This Session) & Continue Tuning", "c": "⚙️ Manually Try More CPU (This Session) & Continue Tuning", "q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)" }
@@ -1174,6 +1226,7 @@ def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp
             print_warning("KCPP status unclear or it has already exited.")
             choices_dict = {"q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)"}
             default_choice_key = "q"
+    # --- End of choice dict logic ---
 
     for key, desc in choices_dict.items(): print(f"  ({key.upper()}) {desc}")
     user_action_choice = prompt("Your choice?", choices=list(choices_dict.keys()), default=default_choice_key).lower()
@@ -1187,78 +1240,118 @@ def handle_post_monitoring_choices_cli(outcome_from_monitor: str, monitored_kcpp
     if kcpp_is_still_running and should_stop_monitored_kcpp:
         print_info(f"Stopping monitored KCPP instance (PID: {kcpp_process_obj.pid})...")
         tensortune_core.kill_process(kcpp_process_obj.pid, force=True)
-        kcpp_process_obj = None 
+        kcpp_process_obj = None # Clear the monitored process
 
-    if user_action_choice == 'u': 
-        if kcpp_is_still_running: 
+    # Determine the suffix for the DB outcome based on user's choice
+    if user_action_choice == 'u': db_outcome_suffix_for_action = "_USER_ACCEPTED_TUNED_CLI"
+    elif user_action_choice == 'l': db_outcome_suffix_for_action = "_USER_LAUNCHED_RISKY_CLI"
+    elif user_action_choice == 's': db_outcome_suffix_for_action = "_USER_SAVED_GOOD_GPU_CLI"
+    elif user_action_choice == 'g': db_outcome_suffix_for_action = "_USER_WANTS_MORE_GPU_CLI"
+    elif user_action_choice == 'a': db_outcome_suffix_for_action = "_USER_AUTO_ADJUST_CPU_CLI"
+    elif user_action_choice == 'c': 
+        if "FAIL" in outcome_from_monitor.upper() or "OOM" in outcome_from_monitor.upper() or "TIMEOUT" in outcome_from_monitor.upper() or "USER_STOPPED" in outcome_from_monitor.upper():
+            db_outcome_suffix_for_action = "_USER_TRIED_CPU_AFTER_FAIL_CLI"
+        else:
+            db_outcome_suffix_for_action = "_USER_WANTS_MORE_CPU_CLI"
+    elif user_action_choice == 'q': db_outcome_suffix_for_action = "_USER_RETURNED_MENU_CLI"
+    
+    # Update the DB record for the monitored run with the user's decision outcome
+    # The initial save was done in launch_and_monitor_for_tuning_cli, here we might update it
+    # if the outcome reflects a user choice.
+    final_outcome_for_db_update = outcome_from_monitor + db_outcome_suffix_for_action
+    tensortune_core.save_config_to_db(
+        DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local,
+        vram_at_decision_from_monitor, # VRAM before this specific monitored run
+        command_list_from_monitor,    # Command for this specific monitored run
+        level_from_monitor,           # Level of this specific monitored run
+        final_outcome_for_db_update,
+        approx_vram_used_from_monitor # VRAM used by this specific monitored run
+    )
+
+    # Perform the chosen action
+    if user_action_choice == 'u': # Accept & Use
+        if kcpp_is_still_running and kcpp_process_obj: # If kept running
             print_info("Keeping current KoboldCpp instance running for use.")
-            db_outcome_suffix_for_action = "_USER_ACCEPTED_TUNED_CLI"
             last_launched_process_info["pid"] = kcpp_process_obj.pid 
-            last_launched_process_info["process_obj"] = kcpp_process_obj
-            last_launched_process_info["command_list"] = last_proposed_command_list_for_db
-            kcpp_process_obj = None 
+            last_launched_process_info["process_obj"] = kcpp_process_obj # Transfer to main launcher tracking
+            last_launched_process_info["command_list"] = command_list_from_monitor
+            kcpp_process_obj = None # Clear from monitored slot
             
             effective_args_for_webui = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
             port_for_webui = effective_args_for_webui.get("--port", "5000")
             if AUTO_OPEN_WEBUI: webbrowser.open(f"http://localhost:{port_for_webui}")
             
-            final_outcome_for_db_update = outcome_from_monitor + db_outcome_suffix_for_action
-            tensortune_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update, last_approx_vram_used_kcpp_mb)
-            
             tuning_in_progress = False 
-            session_control_result = kcpp_control_loop_cli(port_for_webui, is_monitored_instance_being_controlled=False)
+            session_control_result = kcpp_control_loop_cli(port_for_webui, is_monitored_instance_being_controlled=False) # Now it's a "last_launched"
             return session_control_result 
-        else: 
+        else: # Monitored process was stopped or failed, so relaunch
             print_warning("KCPP is not running. Re-launching the accepted configuration for use...")
-            db_outcome_suffix_for_action = "_USER_ACCEPTED_TUNED_RELAUNCH_CLI"
-            launched_proc = launch_kobold_for_use_cli(last_proposed_command_list_for_db, outcome_from_monitor + db_outcome_suffix_for_action, level_of_last_monitored_run, approx_vram_used_mb_for_db=last_approx_vram_used_kcpp_mb)
+            launched_proc = launch_kobold_for_use_cli(
+                command_list_from_monitor, # Use the command from the successful monitor
+                final_outcome_for_db_update, # Log this re-launch with the accept outcome
+                level_from_monitor,
+                vram_at_launch_decision_param=vram_at_decision_from_monitor, # Use VRAM from before monitored run
+                approx_vram_used_mb_for_db_param=approx_vram_used_from_monitor
+            )
             if launched_proc:
                 effective_args_relaunch = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
                 port_relaunch = effective_args_relaunch.get("--port", "5000")
                 session_ctrl_res = kcpp_control_loop_cli(port_relaunch)
                 tuning_in_progress = False; return session_ctrl_res
-            else: print_error("Re-launch failed. Returning to tuning menu."); db_outcome_suffix_for_action = "_USER_ACCEPTED_RELAUNCH_FAIL_CLI"
+            else:
+                print_error("Re-launch failed. Returning to tuning menu.")
+                # DB already updated by launch_kobold_for_use_cli if launch fails
+                return "continue_tuning"
 
-    elif user_action_choice == 'l': 
-        db_outcome_suffix_for_action = "_USER_LAUNCHED_RISKY_CLI"
-        final_outcome_for_db_relaunch = outcome_from_monitor + db_outcome_suffix_for_action
-        if kcpp_process_obj and kcpp_process_obj.poll() is None: 
+    elif user_action_choice == 'l': # Launch Risky
+        print_info("Attempting to launch risky configuration for use...")
+        # The monitored KCPP instance (if any) would have been stopped already unless this logic changes
+        if kcpp_process_obj and kcpp_process_obj.poll() is None: # Ensure it's stopped before new launch
             tensortune_core.kill_process(kcpp_process_obj.pid, force=True); kcpp_process_obj = None
         
-        launched_proc_risky = launch_kobold_for_use_cli(last_proposed_command_list_for_db, final_outcome_for_db_relaunch, level_of_last_monitored_run, approx_vram_used_mb_for_db=last_approx_vram_used_kcpp_mb)
+        launched_proc_risky = launch_kobold_for_use_cli(
+            command_list_from_monitor,
+            final_outcome_for_db_update, # Outcome already reflects risky choice
+            level_from_monitor,
+            vram_at_launch_decision_param=vram_at_decision_from_monitor,
+            approx_vram_used_mb_for_db_param=approx_vram_used_from_monitor
+        )
         if launched_proc_risky:
-            effective_args_relaunch = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
-            port_relaunch = effective_args_relaunch.get("--port", "5000")
-            session_ctrl_res_relaunch = kcpp_control_loop_cli(port_relaunch)
+            effective_args_relaunch_risky = get_effective_session_args(current_tuning_model_path_local, current_tuning_session_base_args)
+            port_relaunch_risky = effective_args_relaunch_risky.get("--port", "5000")
+            session_ctrl_res_relaunch = kcpp_control_loop_cli(port_relaunch_risky)
             tuning_in_progress = False; return session_ctrl_res_relaunch
-        else: print_error("Risky re-launch failed. Returning to tuning menu."); db_outcome_suffix_for_action = "_USER_LAUNCHED_RISKY_FAIL_CLI"
+        else:
+            print_error("Risky re-launch failed. Returning to tuning menu.")
+            return "continue_tuning"
 
-    elif user_action_choice == 's': 
-        db_outcome_suffix_for_action = "_USER_SAVED_GOOD_GPU_CLI"
+    # Adjust OT level for continued tuning based on other choices
+    if user_action_choice == 's': # Save as Good, More GPU
         if current_tuning_attempt_level > current_tuning_min_level: current_tuning_attempt_level -= 1
         else: print_warning("Already at Max GPU, cannot go further.")
-    elif user_action_choice == 'g': 
-        db_outcome_suffix_for_action = "_USER_WANTS_MORE_GPU_CLI"
+    elif user_action_choice == 'g': # Manually More GPU
         if current_tuning_attempt_level > current_tuning_min_level: current_tuning_attempt_level -= 1
         else: print_warning("Already at Max GPU, cannot go further.")
-    elif user_action_choice == 'c' or user_action_choice == 'a': 
-        if user_action_choice == 'a': db_outcome_suffix_for_action = "_USER_AUTO_ADJUST_CPU_CLI"
-        else: db_outcome_suffix_for_action = "_USER_TRIED_CPU_AFTER_FAIL_CLI" if "FAIL" in outcome_from_monitor.upper() or "OOM" in outcome_from_monitor.upper() or "TIMEOUT" in outcome_from_monitor.upper() or "USER_STOPPED" in outcome_from_monitor.upper() else "_USER_WANTS_MORE_CPU_CLI"
+    elif user_action_choice == 'c' or user_action_choice == 'a': # More CPU (Auto or Manual after fail)
         if current_tuning_attempt_level < current_tuning_max_level: current_tuning_attempt_level += 1
         else: print_warning("Already at Max CPU, cannot go further.")
-    elif user_action_choice == 'q': 
-        db_outcome_suffix_for_action = "_USER_RETURNED_MENU_CLI"
-
-    if db_outcome_suffix_for_action and user_action_choice not in ['u', 'l']: 
-        final_outcome_for_db_update_choice = outcome_from_monitor + db_outcome_suffix_for_action
-        tensortune_core.save_config_to_db(DB_FILE, current_tuning_model_path_local, current_tuning_model_analysis_local, vram_at_decision_for_db, last_proposed_command_list_for_db, level_of_last_monitored_run, final_outcome_for_db_update_choice, last_approx_vram_used_kcpp_mb)
     
-    return "continue_tuning" 
+    # 'q' (Return to tuning menu) or other continue tuning actions
+    return "continue_tuning"
 
 
-def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_success: str, level_for_db_record: Optional[int] = None, approx_vram_used_mb_for_db: Optional[float] = None):
-    global last_launched_process_info, gguf_file_global, current_model_analysis_global, vram_at_decision_for_db
+def launch_kobold_for_use_cli(
+    command_list_to_run: List[str],
+    db_outcome_on_success: str,
+    level_for_db_record: Optional[int] = None,
+    # ADDED PARAMETERS:
+    vram_at_launch_decision_param: Optional[float] = None,
+    approx_vram_used_mb_for_db_param: Optional[float] = None
+):
+    global last_launched_process_info, gguf_file_global, current_model_analysis_global # CLI global states
+    global current_tuning_model_path_local, current_tuning_model_analysis_local, tuning_in_progress # Tuning states
 
+    # Stop any previously launched (non-monitored) KCPP process
     if last_launched_process_info.get("process_obj") and last_launched_process_info["process_obj"].poll() is None:
         print_info(f"Stopping previously launched KCPP (PID: {last_launched_process_info['pid']})...")
         tensortune_core.kill_process(last_launched_process_info["pid"])
@@ -1266,25 +1359,46 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
 
     print_info(f"Launching KoboldCpp for use...")
     
-    current_vram_at_this_launch_decision = vram_at_decision_for_db
+    # Determine VRAM at decision: Use passed param, or get fresh if not provided
+    current_vram_at_this_launch_decision = vram_at_launch_decision_param
     if current_vram_at_this_launch_decision is None:
         _, _, _, gpu_info_rich_direct_launch = tensortune_core.get_available_vram_mb(CONFIG)
         current_vram_at_this_launch_decision = gpu_info_rich_direct_launch.get("free_mb", 0.0)
     
-    model_p_for_log = current_tuning_model_path_local if tuning_in_progress else gguf_file_global
-    model_a_for_log = current_tuning_model_analysis_local if tuning_in_progress else current_model_analysis_global
-    final_level_for_db_log = level_for_db_record if level_for_db_record is not None else (current_tuning_attempt_level if tuning_in_progress else 0)
-    vram_used_for_this_db_entry = approx_vram_used_mb_for_db if approx_vram_used_mb_for_db is not None else last_approx_vram_used_kcpp_mb
-
-    tensortune_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, current_vram_at_this_launch_decision, command_list_to_run, final_level_for_db_log, db_outcome_on_success, vram_used_for_this_db_entry)
+    # Determine model path and analysis based on whether we are in a tuning session or main menu
+    model_p_for_log = current_tuning_model_path_local if tuning_in_progress and current_tuning_model_path_local else gguf_file_global
+    model_a_for_log = current_tuning_model_analysis_local if tuning_in_progress and current_tuning_model_analysis_local.get('filepath') else current_model_analysis_global
     
-    vram_at_decision_for_db = None # Reset for next sequence
+    final_level_for_db_log = level_for_db_record
+    if final_level_for_db_log is None: # Default if not provided (e.g. direct launch from main menu)
+        final_level_for_db_log = current_tuning_attempt_level if tuning_in_progress else 0
+
+    # Use the passed parameter for approx_vram_used_mb_for_db
+    vram_used_for_this_db_entry = approx_vram_used_mb_for_db_param
+
+    # Ensure model_p_for_log and model_a_for_log are valid before DB save
+    if not model_p_for_log or not model_a_for_log.get('filepath'):
+        print_error("CRITICAL: Cannot save to DB - model path or analysis is missing for the launch record.")
+    else:
+        tensortune_core.save_config_to_db(
+            DB_FILE, model_p_for_log, model_a_for_log,
+            current_vram_at_this_launch_decision,
+            command_list_to_run, final_level_for_db_log,
+            db_outcome_on_success,
+            vram_used_for_this_db_entry
+        )
     
     launched_kcpp_process, launch_err_msg = tensortune_core.launch_process(command_list_to_run, capture_output=False, new_console=True)
 
     if launch_err_msg or not launched_kcpp_process:
         print_error(f"Failed to launch KoboldCPP: {launch_err_msg or 'Unknown error'}")
-        tensortune_core.save_config_to_db(DB_FILE, model_p_for_log, model_a_for_log, current_vram_at_this_launch_decision, command_list_to_run, final_level_for_db_log, "LAUNCH_FOR_USE_FAILED_CLI", vram_used_for_this_db_entry)
+        if model_p_for_log and model_a_for_log.get('filepath'): # Only log if we have model info
+            tensortune_core.save_config_to_db(
+                DB_FILE, model_p_for_log, model_a_for_log,
+                current_vram_at_this_launch_decision, command_list_to_run,
+                final_level_for_db_log, "LAUNCH_FOR_USE_FAILED_CLI",
+                vram_used_for_this_db_entry
+            )
         return None
     else:
         print_success(f"KoboldCpp launched in new console (PID: {launched_kcpp_process.pid}).")
@@ -1293,10 +1407,15 @@ def launch_kobold_for_use_cli(command_list_to_run: List[str], db_outcome_on_succ
         last_launched_process_info["command_list"] = command_list_to_run
         
         if AUTO_OPEN_WEBUI:
-            args_dict_from_cmd = tensortune_core.args_list_to_dict(command_list_to_run[2:] if command_list_to_run[0].lower() == sys.executable.lower() and len(command_list_to_run)>1 and command_list_to_run[1].lower().endswith((".py", ".pyw")) else command_list_to_run[1:])
+            # Determine port from effective arguments
+            args_dict_from_cmd = tensortune_core.args_list_to_dict(
+                command_list_to_run[2:] if command_list_to_run[0].lower() == sys.executable.lower() and len(command_list_to_run) > 1 and command_list_to_run[1].lower().endswith((".py", ".pyw")) else command_list_to_run[1:]
+            )
+            # Get base args considering global, model-specific (if any for model_p_for_log)
             base_args_for_final_launch = get_effective_session_args(model_p_for_log, {}) 
             effective_launch_args_for_port = base_args_for_final_launch.copy()
-            effective_launch_args_for_port.update(args_dict_from_cmd) 
+            effective_launch_args_for_port.update(args_dict_from_cmd) # Command line args take precedence
+
             port_to_open_webui = effective_launch_args_for_port.get("--port", "5000")
             print_info(f"Attempting to open Web UI at http://localhost:{port_to_open_webui} in a few seconds...")
             threading.Timer(3.0, lambda: webbrowser.open(f"http://localhost:{port_to_open_webui}")).start()
@@ -1514,10 +1633,14 @@ def run_model_tuning_session_cli() -> str:
 
 def main_cli():
     global CONFIG, gguf_file_global, current_model_analysis_global, last_launched_process_info
+    # Note: vram_at_decision_for_db and last_approx_vram_used_kcpp_mb are NOT declared global here.
+    # They will be handled as local variables within this function's scope for non-tuning launches,
+    # or passed from tuning functions.
 
+    # 1. Initialize Core and Load/Create Configuration
     core_init_data = tensortune_core.initialize_launcher()
     CONFIG = core_init_data["config"]
-    _update_cli_globals_from_config() 
+    _update_cli_globals_from_config()
 
     print_info(f"Using configuration file: {tensortune_core.CONFIG_FILE}")
     print_info(f"Using database file: {DB_FILE}")
@@ -1526,39 +1649,98 @@ def main_cli():
         if not core_init_data["config_loaded"]: print_warning(f"Config issue: {core_init_data['config_message']}")
         if not core_init_data["db_success"]: print_warning(f"DB issue: {core_init_data['db_message']}")
 
+    # 2. Handle First Run Prompts if necessary
     if not CONFIG.get("first_run_completed", False):
-        if not handle_first_run_prompts_cli(CONFIG): # Modifies CONFIG in-place
+        if not handle_first_run_prompts_cli(CONFIG):
             print_error("Initial setup failed. Exiting."); sys.exit(1)
-        _update_cli_globals_from_config() # Re-populate after first run
+        _update_cli_globals_from_config()
 
+    # 3. Print Initial Welcome and Core Information
     core_version_display = CONFIG.get('launcher_core_version', 'N/A')
     print_title(f"TensorTune v{LAUNCHER_CLI_VERSION} (Core: {core_version_display})")
+
     sys_info_data = core_init_data.get("system_info", {})
-    gpu_info_data_rich = core_init_data.get("gpu_info", {}) 
-    kcpp_caps = core_init_data.get("koboldcpp_capabilities", {})
-
     print_info(f"OS: {sys_info_data.get('os_name','N/A')} {sys_info_data.get('os_version','N/A')} | Python: {sys_info_data.get('python_version','N/A').split()[0]}")
-    
+
+    # 4. Print GPU Information
+    gpu_info_data_rich = core_init_data.get("gpu_info", {})
     gpu_message_to_display = gpu_info_data_rich.get('message', 'Could not detect GPU details.')
-    if gpu_info_data_rich.get("success"): print_info(f"GPU Info: {gpu_message_to_display}")
-    else: print_warning(f"GPU Info: {gpu_message_to_display}")
-    if gpu_info_data_rich.get("override_active"): print_info(f"  VRAM Budget Override Active: Total {gpu_info_data_rich.get('total_mb_budgeted',0):.0f}MB")
-    
-    if "error" in kcpp_caps: print_warning(f"KCPP Caps Error: {kcpp_caps['error']}")
-    else: print_info(f"KCPP Caps: CUDA:{kcpp_caps.get('cuda', False)}, ROCm:{kcpp_caps.get('rocm',False)}, FlashAttn:{kcpp_caps.get('flash_attn',False)}, OverrideTensors:{kcpp_caps.get('overridetensors',False)}")
+    if gpu_info_data_rich.get("success"):
+        print_info(f"GPU Info: {gpu_message_to_display}")
+    else:
+        print_warning(f"GPU Info: {gpu_message_to_display}")
+    if gpu_info_data_rich.get("override_active"):
+        print_info(f"  VRAM Budget Override Active: Total {gpu_info_data_rich.get('total_mb_budgeted',0):.0f}MB")
 
+    # 5. Conditionally Print Library Status Warnings
+    show_lib_warnings_on_startup = True
+    if CONFIG.get("first_run_completed", False) and CONFIG.get("suppress_optional_lib_warnings", False):
+        show_lib_warnings_on_startup = False
+
+    if show_lib_warnings_on_startup:
+        print_info("Checking status of optional support libraries (can be suppressed in settings after first run):")
+        optional_libs_to_check_status = {
+            "PyADLX (AMD)": tensortune_core.pyadlx_load_error_reason,
+            "WMI (Windows)": tensortune_core.wmi_load_error_reason,
+            "PyZE (Intel)": tensortune_core.pyze_load_error_reason,
+            "Appdirs": tensortune_core.appdirs_load_error_reason,
+            "Metal (Apple)": tensortune_core.metal_load_error_reason,
+        }
+        any_optional_warnings_printed = False
+        for lib_name, error_reason in optional_libs_to_check_status.items():
+            if error_reason:
+                if lib_name == "WMI (Windows)" and platform.system() != "win32": continue
+                if lib_name == "Metal (Apple)" and platform.system() != "darwin": continue
+                print_warning(f"  ! {lib_name}: {error_reason}")
+                any_optional_warnings_printed = True
+        
+        critical_issues_found = False
+        if tensortune_core.psutil_load_error_reason:
+            print_error(f"  CRITICAL! Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)")
+            critical_issues_found = True
+        if CONFIG.get("gpu_detection", {}).get("nvidia", True) and tensortune_core.pynvml_load_error_reason:
+            print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
+            critical_issues_found = True
+
+        if not any_optional_warnings_printed and not critical_issues_found and CONFIG.get("first_run_completed", False):
+            print_success("  All checked optional and critical support libraries seem to be available or not applicable for your setup.")
+            
+    elif CONFIG.get("first_run_completed", False):
+        print_info("Optional library status warnings are currently suppressed (configurable in settings).")
+        critical_issues_found_suppressed_mode = False
+        if tensortune_core.psutil_load_error_reason:
+            print_error(f"  CRITICAL! Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)")
+            critical_issues_found_suppressed_mode = True
+        if CONFIG.get("gpu_detection", {}).get("nvidia", True) and tensortune_core.pynvml_load_error_reason:
+            print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
+            critical_issues_found_suppressed_mode = True
+        if critical_issues_found_suppressed_mode:
+            print_warning("  Note: Above CRITICAL library issues are always shown even if optional warnings are suppressed.")
+
+    # 6. Print KoboldCpp Capabilities
+    kcpp_caps = core_init_data.get("koboldcpp_capabilities", {})
+    if "error" in kcpp_caps:
+        print_warning(f"KCPP Caps Error: {kcpp_caps['error']}")
+    else:
+        print_info(f"KCPP Caps: CUDA:{kcpp_caps.get('cuda', False)}, ROCm:{kcpp_caps.get('rocm',False)}, FlashAttn:{kcpp_caps.get('flash_attn',False)}, OverrideTensors:{kcpp_caps.get('overridetensors',False)}")
+
+    # 7. Validate KoboldCpp Executable Path
     if not _validate_and_update_kcpp_exe_path_in_config(CONFIG, KOBOLDCPP_EXECUTABLE):
-        # If initial validation from config fails, prompt user to fix it now.
-        print_error(f"KoboldCpp executable path '{KOBOLDCPP_EXECUTABLE}' is not valid.")
+        print_error(f"Initial KoboldCpp executable path '{KOBOLDCPP_EXECUTABLE}' is not valid.")
         if confirm("Would you like to correct the KoboldCpp executable path now in settings?", default=True):
-            manage_launcher_settings_cli() # This will allow editing path
-            _update_cli_globals_from_config() # Reload globals
-            if not _validate_and_update_kcpp_exe_path_in_config(CONFIG, KOBOLDCPP_EXECUTABLE): # Check again
+            manage_launcher_settings_cli()
+            _update_cli_globals_from_config()
+            if not _validate_and_update_kcpp_exe_path_in_config(CONFIG, KOBOLDCPP_EXECUTABLE):
                 print_error("FATAL: KoboldCpp path still not valid after attempting to fix. Exiting."); sys.exit(1)
+            kcpp_caps_after_fix = tensortune_core.detect_koboldcpp_capabilities(CONFIG["koboldcpp_executable"])
+            if _update_gpu_backend_flags_in_config_cli(kcpp_caps_after_fix):
+                tensortune_core.save_launcher_config(CONFIG)
+                _update_cli_globals_from_config()
+                print_info("KCPP capabilities re-checked and GPU backend flags potentially updated.")
         else:
-            print_error("FATAL: KoboldCpp path not valid. Exiting."); sys.exit(1)
-    _update_cli_globals_from_config() # Path might have been resolved
+            print_error("FATAL: KoboldCpp path not valid and not corrected. Exiting."); sys.exit(1)
 
+    # 8. Main Application Loop
     while True:
         gguf_selection_result = select_gguf_file_cli()
         if gguf_selection_result is None: break 
@@ -1578,7 +1760,7 @@ def main_cli():
             "s": "Back to Model Selection / Main Menu"
         }
         print("\nModel Actions Menu:")
-        for k, v in model_actions_menu.items(): print(f"  ({k.upper()}) {v}")
+        for k_menu, v_menu in model_actions_menu.items(): print(f"  ({k_menu.upper()}) {v_menu}")
         model_action_choice = prompt("Choose action for this model", choices=list(model_actions_menu.keys()), default="t").lower()
 
         if model_action_choice == 's': continue 
@@ -1586,11 +1768,14 @@ def main_cli():
         session_outcome = ""
         if model_action_choice == 't':
             session_outcome = run_model_tuning_session_cli() 
-        elif model_action_choice == 'b':
+        
+        elif model_action_choice == 'b': # Launch Best Remembered
             print_info("Attempting to launch using the best remembered configuration...")
             _, _, _, current_gpu_full_info_best = tensortune_core.get_available_vram_mb(CONFIG)
-            current_actual_hw_vram_mb_best = current_gpu_full_info_best.get("free_mb", 0.0)
-            best_historical_config = tensortune_core.find_best_historical_config(DB_FILE, current_model_analysis_global, current_actual_hw_vram_mb_best, CONFIG)
+            # This is a local variable for this specific launch context
+            vram_at_decision_for_best_launch = current_gpu_full_info_best.get("free_mb", 0.0)
+            
+            best_historical_config = tensortune_core.find_best_historical_config(DB_FILE, current_model_analysis_global, vram_at_decision_for_best_launch, CONFIG)
 
             if best_historical_config and best_historical_config.get("args_list"):
                 print_info(f"Found best remembered config - Level: {best_historical_config['attempt_level']}, Outcome: {best_historical_config['outcome']}")
@@ -1607,38 +1792,56 @@ def main_cli():
                 final_command_args_list = tensortune_core.build_command(gguf_file_global, historical_ot_string, current_model_analysis_global, final_effective_args_dict, current_attempt_level_for_tuning=historical_attempt_level)
                 command_list_to_execute = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, final_command_args_list)
                 
-                vram_at_decision_for_db = current_actual_hw_vram_mb_best 
                 approx_vram_used_from_hist = best_historical_config.get("approx_vram_used_kcpp_mb")
 
-                launched_proc = launch_kobold_for_use_cli(command_list_to_execute, "SUCCESS_USER_LAUNCHED_BEST_REMEMBERED_CLI", historical_attempt_level, approx_vram_used_mb_for_db=approx_vram_used_from_hist)
+                launched_proc = launch_kobold_for_use_cli(
+                    command_list_to_execute,
+                    "SUCCESS_USER_LAUNCHED_BEST_REMEMBERED_CLI",
+                    historical_attempt_level,
+                    vram_at_launch_decision_param=vram_at_decision_for_best_launch, # Pass local value
+                    approx_vram_used_mb_for_db_param=approx_vram_used_from_hist  # Pass local value
+                )
                 if launched_proc:
                     port_best = final_effective_args_dict.get("--port", "5000")
                     session_outcome = kcpp_control_loop_cli(port_best)
-                else: session_outcome = "new_gguf" 
+                else:
+                    session_outcome = "new_gguf"
             else:
                 print_warning("No suitable remembered configuration found. Suggesting Direct Launch or Auto-Tune.")
-                session_outcome = "new_gguf" 
-        elif model_action_choice == 'd':
+                session_outcome = "new_gguf"
+        
+        elif model_action_choice == 'd': # Direct Launch
             print_info("Direct Launch with current default settings...")
             effective_args_direct = get_effective_session_args(gguf_file_global, {})
             
-            _, _, _, gpu_info_direct = tensortune_core.get_available_vram_mb(CONFIG)
-            vram_at_decision_for_db = gpu_info_direct.get("free_mb", 0.0) 
-            last_approx_vram_used_kcpp_mb = None 
+            _, _, _, gpu_info_direct_launch = tensortune_core.get_available_vram_mb(CONFIG)
+            # This is a local variable for this specific launch context
+            vram_at_decision_for_direct_launch = gpu_info_direct_launch.get("free_mb", 0.0)
+            approx_vram_used_for_direct_launch = None # No monitoring for direct launch
 
-            args_list_direct = tensortune_core.build_command(gguf_file_global, None, current_model_analysis_global, effective_args_direct, current_attempt_level_for_tuning=0) 
+            args_list_direct = tensortune_core.build_command(gguf_file_global, None, current_model_analysis_global, effective_args_direct, current_attempt_level_for_tuning=0)
             command_list_direct = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_list_direct)
-            launched_proc_direct = launch_kobold_for_use_cli(command_list_direct, "SUCCESS_USER_DIRECT_SETTINGS_CLI", 0, approx_vram_used_mb_for_db=None)
+            
+            launched_proc_direct = launch_kobold_for_use_cli(
+                command_list_direct,
+                "SUCCESS_USER_DIRECT_SETTINGS_CLI",
+                0,
+                vram_at_launch_decision_param=vram_at_decision_for_direct_launch, # Pass local value
+                approx_vram_used_mb_for_db_param=approx_vram_used_for_direct_launch # Pass local value
+            )
             if launched_proc_direct:
                 port_direct = effective_args_direct.get("--port", "5000")
                 session_outcome = kcpp_control_loop_cli(port_direct)
-            else: session_outcome = "new_gguf"
+            else:
+                session_outcome = "new_gguf"
 
         if session_outcome == "quit_script": break
         if session_outcome == "quit_script_leave_running":
-            print_info("Exiting launcher. KoboldCpp may still be running as per user choice."); return
+            print_info("Exiting launcher. KoboldCpp may still be running as per user choice.")
+            return
     
     print_title("TensorTune Finished")
+
 
 
 if __name__ == "__main__":

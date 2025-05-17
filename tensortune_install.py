@@ -184,6 +184,7 @@ def install_dependencies_from_file(create_venv=False):
             print(f"{YELLOW}Pip Output:\n{result.stdout}\n{result.stderr}{ENDC}")
             return False
 
+
 def check_and_advise_optional_components():
     """Checks for optional libraries TensorTune can use and advises."""
     print_header("Step 3: Checking Optional Components & Advising")
@@ -192,23 +193,23 @@ def check_and_advise_optional_components():
         ("psutil", "system/process info (CPU threads, process kill)", "psutil"),
         ("pynvml", "NVIDIA GPU VRAM monitoring (for NVIDIA GPUs)", "pynvml"),
         ("rich", "enhanced CLI experience", "rich"),
-        ("appdirs", "consistent config/data paths", "appdirs"),
-        ("tkinter", "GUI operation (usually included with Python)", None), # None means not pip-installable directly this way
-        ("wmi", "Windows Management Instrumentation (Windows AMD/fallback GPU info) - Windows Only", "WMI")
+        ("appdirs", "consistent config/data paths", "appdirs"), # Added appdirs
+        ("tkinter", "GUI operation (usually included with Python)", None),
+        ("WMI", "Windows Management Instrumentation (Windows AMD/fallback GPU info) - Windows Only", "WMI") # Changed import name to WMI for direct check
     ]
 
     special_optionals = [
-        ("pyadlx", "AMD ADLX for detailed AMD GPU info (Windows, requires manual build/AMD SDK)", None), # Manual
-        ("pyze.api", "Intel Level Zero (pyze-l0) for Intel Arc GPU info (may need driver/runtime setup)", "pyze-l0") # pyze.api is what core imports
+        ("pyadlx", "AMD ADLX for detailed AMD GPU info (Windows, requires manual build/AMD SDK)", None),
+        ("pyze.api", "Intel Level Zero (pyze-l0) for Intel Arc GPU info", "pyze-l0")
     ]
 
     all_good_flag = True
     print_info("Checking common optional libraries:")
     for import_name, purpose, pip_name in pip_optionals:
-        if import_name == "wmi" and platform.system() != "Windows":
+        if import_name == "WMI" and platform.system() != "Windows": # Corrected import name for check
             continue 
         try:
-            __import__(import_name)
+            __import__(import_name) # Use the actual import name Python would use
             print_success(f"{import_name} is available ({purpose}).")
         except ImportError:
             if import_name == "tkinter":
@@ -224,18 +225,20 @@ def check_and_advise_optional_components():
                     print_info(f"  Consider installing: pip install {pip_name}")
     
     print_info("\nChecking specialized optional libraries (may require manual setup):")
-    for import_name, purpose, pip_name_or_hint in special_optionals:
+    for import_name, purpose, setup_hint_or_pip in special_optionals:
         try:
-            __import__(import_name)
-            print_success(f"{import_name if '.' not in import_name else import_name.split('.')[0]} seems to be available ({purpose}).")
+            __import__(import_name) # e.g., pyadlx or pyze.api
+            actual_display_name = import_name.split('.')[0] # Get 'pyze' from 'pyze.api'
+            print_success(f"{actual_display_name} seems to be available ({purpose}).")
         except ImportError:
-            print_warning(f"{import_name if '.' not in import_name else import_name.split('.')[0]} not found. TensorTune will have limited info for '{purpose}'.")
+            actual_display_name = import_name.split('.')[0]
+            print_warning(f"{actual_display_name} not found. TensorTune will have limited info for '{purpose}'.")
             if import_name == "pyadlx":
                 print_info("  PyADLX is for AMD GPUs on Windows and requires manual building with AMD's ADLX SDK.")
-                print_info("  TensorTune will use WMI as a fallback. See README.md for PyADLX details.")
-            elif import_name == "pyze.api": # Matches the pyze-l0 package for core
-                print_info(f"  PyZE (usually package '{pip_name_or_hint}') is for Intel Arc GPUs. Try 'pip install {pip_name_or_hint}'.")
-                print_info("  Requires Intel drivers and Level Zero runtime to be functional.")
+                print_info(f"  TensorTune will use WMI as a fallback. See {BOLD}PYADLX_SETUP_GUIDE.md{ENDC} for details.")
+            elif import_name == "pyze.api":
+                print_info(f"  PyZE (usually package '{setup_hint_or_pip}') is for Intel Arc/Xe GPUs. Try 'pip install {setup_hint_or_pip}'.")
+                print_info(f"  Requires Intel drivers and Level Zero runtime. See {BOLD}PYZE_SETUP_GUIDE.md{ENDC} for details.")
     
     return all_good_flag
 
@@ -268,11 +271,9 @@ def check_tensortune_files():
     return True
 
 def create_launch_scripts_if_wanted():
-    print_header("Step 6: Create Convenience Launch Scripts (Optional)")
-    if not (Path("tensortune_cli.py").exists() and Path("tensortune_gui.py").exists()):
-        print_warning("Core GUI/CLI files missing, cannot create launch scripts.")
-        return
-
+    print_header(f"Step 6: Create Convenience Launch Scripts (Optional) for TensorTune v{CURRENT_TENSORTUNE_VERSION}") # Add version
+    # ... (rest of the function as before, ensuring CURRENT_TENSORTUNE_VERSION is used in comments) ...
+    # Ensure the target_script paths are correct if you renamed files, e.g. if you have TT_CLI.py vs tensortune_cli.py
     python_exe = sys.executable.replace("pythonw.exe", "python.exe")
 
     scripts_to_create = {

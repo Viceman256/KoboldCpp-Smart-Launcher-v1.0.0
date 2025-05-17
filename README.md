@@ -117,16 +117,26 @@ TensorTune helps by:
 - Monitoring VRAM usage and KoboldCpp load success/failure.
 - Remembering what works best for each model and your hardware.
 
+## ⚙️ Optional Dependencies & Advanced Setup
+
+TensorTune can leverage additional Python libraries for more detailed hardware information, especially for specific GPU vendors. These are **optional**. If not installed, TensorTune will use fallback methods.
+
+-   **NVIDIA GPUs:** `pynvml` (usually installed by `requirements.txt`) provides detailed VRAM and GPU stats.
+-   **AMD GPUs (Windows):** `PyADLX` can provide enhanced details. This requires a manual C++ binding build. See `PYADLX_SETUP_GUIDE.md` for instructions.
+-   **Intel GPUs (Arc/Xe):** `pyze-l0` (PyZE) offers specific Intel GPU metrics. See `PYZE_SETUP_GUIDE.md` for setup.
+-   **Windows Fallback:** `WMI` Python package is used as a general fallback on Windows. See `WMI_SETUP_GUIDE.md` for details if issues arise.
+
 ## 🔍 Troubleshooting
 
--   **KoboldCpp Not Found:** Ensure the path to your `koboldcpp.exe` (or `.py` script / Linux executable) is correctly set in TensorTune's Settings.
--   **Python Errors / Module Not Found:** Run `python install.py` again or manually install dependencies from `requirements.txt` (e.g., `pip install -r requirements.txt`). Ensure you are in the correct Python environment if using one.
--   **VRAM Info Not Displaying or "PyADLX/PyZE not found":**
-    -   **NVIDIA:** Ensure `pynvml` is installed (`pip install pynvml`) and your NVIDIA drivers are up to date.
-    -   **AMD (Windows):** The "PyADLX (AMD) library not found" message is usually informational. PyADLX requires a manual build (see "Dependencies for Advanced GPU Information" above). TensorTune will use WMI as a fallback.
-    -   **Intel:** The "PyZE (Intel Level Zero) not found" message indicates the `pyze-l0` library isn't installed or its underlying dependencies (drivers, Level Zero runtime) are missing. Try `pip install pyze-l0`.
-    -   **General:** Check GPU selection settings within TensorTune.
--   **Auto-Tuning Fails Repeatedly:** Try reducing KoboldCpp's context size or other memory-intensive settings in TensorTune's global or model-specific arguments. Manually adjust the OT Level towards more CPU offload.
+-   **KoboldCpp Not Found:** Set the correct path in the Settings tab (GUI) or Launcher Settings (CLI).
+-   **Python Errors:** Ensure you've installed all dependencies from `requirements.txt`.
+-   **VRAM Info Not Displaying / Library Errors:**
+    -   **NVIDIA:** Ensure `pynvml` is installed (`pip install pynvml`).
+    -   **AMD (Windows):** If you see "PyADLX library not found" or related errors, this is often normal as PyADLX is optional and requires manual setup. TensorTune will use WMI as a fallback. If you wish to attempt PyADLX setup for potentially more detailed info, refer to **`PYADLX_SETUP_GUIDE.md`**.
+    -   **Intel (Arc/Xe):** If you see "PyZE library not found" or initialization errors, ensure `pyze-l0` is installed (`pip install pyze-l0`) and your Intel drivers/Level Zero runtime are up-to-date. Refer to **`PYZE_SETUP_GUIDE.md`**.
+    -   **WMI (Windows):** If you see WMI errors, ensure the `WMI` package is installed (`pip install WMI`) and your Windows WMI service is functioning. Refer to **`WMI_SETUP_GUIDE.md`**.
+    -   Also, check GPU selection settings in TensorTune.
+-   **Auto-Tuning Fails:** Try reducing context size or other memory-intensive settings. Manually adjust the OT Level towards more CPU offload.
 
 ## 🙏 Acknowledgments
 This project leverages the powerful tensor offloading capabilities of KoboldCpp. TensorTune aims to make these advanced optimizations more accessible. Inspired by community discussions on maximizing LLM performance.
