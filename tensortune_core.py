@@ -62,7 +62,7 @@ _CONFIG_FILE_BASENAME = "tensortune_config.json"
 CONFIG_FILE = os.path.join(_get_user_app_config_dir(), _CONFIG_FILE_BASENAME)
 
 _DB_FILE_BASENAME_DEFAULT = "tensortune_history.db"
-CORE_VERSION = "1.1.0" # Core version updated
+CORE_VERSION = "1.0.1-TT" # Core version updated
 
 DEFAULT_CONFIG_TEMPLATE = {
     "koboldcpp_executable": "koboldcpp.exe" if sys.platform == "win32" else "./koboldcpp",
