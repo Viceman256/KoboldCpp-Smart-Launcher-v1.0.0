@@ -116,7 +116,7 @@ DEFAULT_CONFIG_TEMPLATE = {
     "selected_gpu_index": 0,
     "override_vram_budget": False,
     "manual_vram_total_mb": 8192,
-    "launcher_core_version": CORE_VERSION, # Ensure CORE_VERSION is defined, e.g., "1.1.0-TT"
+    "launcher_core_version": CORE_VERSION, # Ensure CORE_VERSION is defined, e.g., "1.1.1-TT"
     "suppress_optional_lib_warnings": False # <-- NEW FLAG
 }
 

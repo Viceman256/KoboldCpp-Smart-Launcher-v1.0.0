@@ -1,3 +1,21 @@
+# TensorTune v1.1.1 - Changelog
+
+### Added
+- **Context-Aware Library Status Warnings (CLI & GUI):** Startup messages for optional GPU monitoring libraries (PyADLX, PyZE, WMI, Metal) are now more relevant to the user's detected hardware, significantly reducing irrelevant log noise.
+- **CLI: Option to Suppress Optional Library Warnings:** Users can now toggle a setting in the CLI to hide non-critical optional library status messages after the first successful run. Critical warnings (e.g., for Psutil, or PyNVML if NVIDIA GPU is targeted) will still display.
+- **Detailed Setup Guides for Optional Libraries:**
+    - `PYADLX_SETUP_GUIDE.md`: For manual setup of PyADLX (AMD GPUs on Windows).
+    - `PYZE_SETUP_GUIDE.md`: For PyZE/`pyze-l0` (Intel Arc/Xe GPUs).
+    - `WMI_SETUP_GUIDE.md`: For the WMI Python package (Windows fallback).
+- Core error messages for these libraries now direct users to these new guides.
+- `appdirs` added to `requirements.txt` and default generation in `tensortune_install.py` for consistent config/data path management.
+
+### Changed
+- **Improved Startup Logging (CLI & GUI):** Enhanced clarity and structure of initial diagnostic messages.
+- **Updated Documentation:** `README.md`, `tensortune_examples.py`, and `tensortune_install.py` updated to reflect version 1.1.1, new features, and guide locations.
+- **Core Error Messages:** Refined error messages in `tensortune_core.py` for PyADLX, PyZE, and WMI to be more informative and link to setup guides.
+- **GUI Initialization Order:** Fine-tuned the `__init__` sequence in `tensortune_gui.py` for more robust startup and data availability for logging.
+
 # TensorTune v1.1.0 - Changelog
 
 ## Overview
@@ -87,7 +105,7 @@ Thank you for using TensorTune! We appreciate your feedback and encourage you to
 ---
 
 
-TensorTune v1.0.0 - Initial Release
+## TensorTune v1.0.0 - Initial Release
 
 This marks the first official release of TensorTune, rebranded from the KoboldCpp Smart Launcher, now with enhanced stability, GPU management, and user experience features.
 

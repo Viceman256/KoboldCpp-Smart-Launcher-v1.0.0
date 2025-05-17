@@ -1,4 +1,4 @@
-# TensorTune v1.1.0 Requirements
+# TensorTune v1.1.1 Requirements
 
 # Core GUI dependency
 customtkinter>=5.2.0

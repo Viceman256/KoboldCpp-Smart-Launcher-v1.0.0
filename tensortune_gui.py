@@ -90,7 +90,7 @@ class KoboldLauncherGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("TensorTune (GUI Edition v1.1.0)") # Assuming v1.1.0 now
+        self.title("TensorTune (GUI Edition v1.1.1)") # Assuming v1.1.1 now
         self.geometry("950x880")
         self.minsize(900, 780)
 
