@@ -10,38 +10,37 @@ psutil>=5.9.0
 
 # NVIDIA GPU VRAM monitoring (used by core)
 # Install if you have an NVIDIA GPU.
+# pip install pynvml
 pynvml>=11.5.0
 
 # Enhanced CLI user interface (used by tensortune_cli.py)
 # Recommended for a better CLI experience.
+# pip install rich
 rich>=13.4.0
 
 # Consistent application directories (used by core if available)
 # Provides better platform-agnostic paths for config/data.
+# pip install appdirs
 appdirs>=1.4.4
 
 # --- Platform-Specific for Advanced GPU Info (Install manually if needed) ---
-# These are used by tensortune_core.py for more detailed GPU information on specific platforms.
-# TensorTune will attempt to use them if installed but can function without them
-# (though GPU info might be limited for the respective vendors).
+# TensorTune attempts to use these for more detailed GPU information if available.
 
-# For AMD GPUs on Windows (detailed VRAM & listing):
-# May require AMD Adrenalin Software with the ADLX SDK components.
-# Consider installing if you have an AMD GPU on Windows and need precise info.
-# Example pip install (might vary): pip install pyadlx
+# For Windows systems (fallback GPU info, general system info)
+# pip install WMI
+wmi>=1.5.1
 
-# For Windows Management Instrumentation (fallback GPU info on Windows):
-# Generally available on Windows, but this library provides a Python interface.
-# Install if other methods fail or for general WMI access.
-# pip install wmi
+# For AMD GPUs on Windows (provides detailed VRAM & listing if ADLX SDK is present):
+# PyADLX is NOT a standard pip package. It requires manual building against the
+# AMD ADLX SDK, typically installed with AMD Adrenalin Software.
+# See TensorTune README or AMD's ADLX documentation for more details.
+# (No pip install line here as it's a manual build process)
 
 # For Intel GPUs using Level Zero API (detailed VRAM & listing):
-# May require Intel drivers and the Level Zero runtime.
-# Package name is often 'pyze-l0'.
+# May require Intel drivers and the Level Zero runtime to be installed first.
 # pip install pyze-l0
+# pyze-l0>=0.1.0
 
-# Metal bindings for macOS are typically part of the system Python or an environment
-# that supports Metal development. Not usually a separate pip install.
 
 # --- Notes ---
 # tkinter: Comes with most Python installations. If missing (especially on Linux),

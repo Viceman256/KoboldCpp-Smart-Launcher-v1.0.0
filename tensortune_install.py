@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-TensorTune - Installation Script
-This script helps set up the TensorTune by installing 
-dependencies and checking for required components.
+TensorTune - Installation Script (v1.1.0 Helper)
+This script helps set up TensorTune by checking Python, creating a
+default requirements.txt if needed, installing dependencies,
+and providing guidance for optional components.
 """
 
 import os
@@ -19,6 +20,8 @@ RED = "\033[91m"
 BLUE = "\033[94m"
 ENDC = "\033[0m"
 BOLD = "\033[1m"
+
+CURRENT_TENSORTUNE_VERSION = "1.1.0" # For display purposes in this script
 
 def print_header(text):
     """Print a formatted header"""
@@ -42,288 +45,321 @@ def print_info(text):
 
 def check_python_version():
     """Check if Python version is compatible"""
-    print_header("Checking Python Version")
+    print_header("Step 1: Checking Python Version")
     
     version = sys.version_info
-    if version.major < 3 or (version.major == 3 and version.minor < 7):
-        print_error(f"Python 3.7+ is required. Found: Python {version.major}.{version.minor}.{version.micro}")
-        return False
+    if version.major < 3 or (version.major == 3 and version.minor < 8): 
+        print_error(f"Python 3.8+ is highly recommended for TensorTune (especially GUI). Found: Python {version.major}.{version.minor}.{version.micro}")
+        if version.minor < 7: # Python 3.6 and below are definitively too old for some dependencies
+            print_error("This Python version is too old and unsupported for core dependencies.")
+            return False
+        print_warning("You may encounter issues with older Python 3.7, particularly with the GUI. Consider upgrading Python.")
     
-    print_success(f"Python {version.major}.{version.minor}.{version.micro} detected (compatible)")
+    print_success(f"Python {version.major}.{version.minor}.{version.micro} detected.")
     return True
 
-def install_dependencies(create_venv=False):
-    """Install required dependencies"""
-    print_header("Installing Dependencies")
-    
-    # Check if in a virtual environment
-    in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
-    
-    if create_venv and not in_venv:
-        venv_name = "launcher_env"
-        print_info(f"Creating virtual environment '{venv_name}'...")
-        try:
-            subprocess.run([sys.executable, "-m", "venv", venv_name], check=True)
-            
-            # Activate instructions
-            if platform.system() == "Windows":
-                activate_cmd = f"{venv_name}\\Scripts\\activate"
-            else:
-                activate_cmd = f"source {venv_name}/bin/activate"
-                
-            print_success(f"Virtual environment created successfully.")
-            print_info(f"To activate the virtual environment, run:")
-            print(f"    {activate_cmd}")
-            print_info(f"Then run this script again after activation.")
-            return False
-        except subprocess.CalledProcessError:
-            print_error("Failed to create virtual environment. Continuing with system Python...")
-    
-    # Install dependencies
+def generate_requirements_file_if_needed():
+    """Generates requirements.txt if it doesn't exist."""
     requirements_file = Path("requirements.txt")
     if not requirements_file.exists():
-        print_warning("requirements.txt not found. Creating default requirements file...")
-        with open(requirements_file, "w") as f:
-            f.write("""# Core dependencies
+        print_warning(f"{requirements_file} not found. Creating a default one for TensorTune v{CURRENT_TENSORTUNE_VERSION}...")
+        default_req_content = f"""# TensorTune v{CURRENT_TENSORTUNE_VERSION} Requirements
+
+# Core GUI dependency
 customtkinter>=5.2.0
 
-# Optional but recommended for full functionality
-psutil>=5.9.0     # System information and process management
-pynvml>=11.5.0    # NVIDIA GPU VRAM monitoring
-rich>=13.4.0      # Improved CLI interface
-""")
-    
-    print_info("Installing required dependencies...")
-    result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
-                          capture_output=True, text=True)
-    
-    if result.returncode != 0:
-        print_error(f"Failed to install dependencies: {result.stderr}")
-        return False
-    
-    print_success("Dependencies installed successfully")
+# --- Optional but highly recommended for full functionality ---
+psutil>=5.9.0
+pynvml>=11.5.0
+rich>=13.4.0
+appdirs>=1.4.4
+
+# --- Platform-Specific for Advanced GPU Info (Install manually if needed) ---
+# Windows Management Instrumentation (Windows fallback GPU info)
+# Consider: pip install WMI
+wmi>=1.5.1
+
+# Intel Level Zero (Intel GPU Info) - may require driver/runtime setup
+# Consider: pip install pyze-l0
+# pyze-l0>=0.1.0
+
+# AMD ADLX (Windows AMD GPU Info) - requires manual build, see README/AMD docs
+# Not a direct pip install.
+
+# --- Notes ---
+# tkinter: Standard library, install via system package manager if missing (e.g., python3-tk).
+"""
+        try:
+            with open(requirements_file, "w") as f:
+                f.write(default_req_content)
+            print_success(f"Default {requirements_file} created.")
+        except IOError as e:
+            print_error(f"Could not create {requirements_file}: {e}")
+            return False
+    else:
+        print_info(f"{requirements_file} already exists.")
     return True
 
-def check_optional_dependencies():
-    """Check for optional dependencies and provide info"""
-    print_header("Checking Optional Dependencies")
+
+def install_dependencies_from_file(create_venv=False):
+    """Install dependencies from requirements.txt"""
+    header_text = "Step 2: Installing Dependencies"
+    if create_venv:
+        header_text += " (in Virtual Environment)"
+    else:
+        header_text += " (in Current Environment)"
+    print_header(header_text)
     
-    # Check for psutil
-    try:
-        import psutil
-        print_success("psutil is installed (enables system monitoring and process management)")
-    except ImportError:
-        print_warning("psutil is not installed. Some system monitoring features will be limited.")
-        print_info("Install with: pip install psutil")
-    
-    # Check for pynvml (NVIDIA GPU monitoring)
-    try:
-        import pynvml
-        print_success("pynvml is installed (enables NVIDIA GPU VRAM monitoring)")
-    except ImportError:
-        print_warning("pynvml is not installed. NVIDIA GPU VRAM monitoring will be unavailable.")
-        print_info("Install with: pip install pynvml")
-    
-    # Check for rich (improved CLI interface)
-    try:
-        import rich
-        print_success("rich is installed (enables improved CLI interface)")
-    except ImportError:
-        print_warning("rich is not installed. CLI interface will use basic formatting.")
-        print_info("Install with: pip install rich")
-    
-    # Check for tkinter (required for GUI)
-    try:
-        import tkinter
-        print_success("tkinter is installed (required for GUI)")
-    except ImportError:
-        print_error("tkinter is not installed. GUI interface will not work.")
-        if platform.system() == "Linux":
-            if shutil.which("apt"):
-                print_info("Install with: sudo apt-get install python3-tk")
-            elif shutil.which("dnf"):
-                print_info("Install with: sudo dnf install python3-tkinter")
+    requirements_file = Path("requirements.txt")
+    if not requirements_file.exists():
+        print_error(f"{requirements_file} not found. Cannot install dependencies.")
+        print_info("Please ensure requirements.txt is present or run this script again to generate a default.")
+        return False
+
+    # Ensure we use 'python.exe' for pip on Windows, not 'pythonw.exe'
+    pip_executable = sys.executable
+    if platform.system() == "Windows" and "pythonw.exe" in pip_executable.lower():
+        pip_executable = pip_executable.lower().replace("pythonw.exe", "python.exe")
+        if not Path(pip_executable).exists(): # Fallback if python.exe isn't where pythonw.exe is
+            pip_executable = sys.executable # Revert to original sys.executable if replacement not found
+
+    pip_cmd = [pip_executable, "-m", "pip", "install", "-r", requirements_file]
+
+    if create_venv:
+        venv_name = "tensortune_env"
+        if not Path(venv_name).exists():
+            print_info(f"Creating virtual environment '{venv_name}'...")
+            try:
+                # Use sys.executable (which should be python.exe path if resolved) to create venv
+                subprocess.run([sys.executable, "-m", "venv", venv_name], check=True, capture_output=True, text=True)
+                print_success(f"Virtual environment '{venv_name}' created successfully.")
+            except subprocess.CalledProcessError as e:
+                print_error(f"Failed to create virtual environment: {e.stderr}")
+                return False # Critical failure if venv creation fails when requested
+
+            if platform.system() == "Windows":
+                pip_executable_venv = str(Path(venv_name) / "Scripts" / "python.exe")
+                activate_instruction = f"  {venv_name}\\Scripts\\activate"
             else:
-                print_info("Please install tkinter using your package manager.")
-        elif platform.system() == "Darwin":  # macOS
-            print_info("Install tkinter by reinstalling Python with the official installer from python.org")
+                pip_executable_venv = str(Path(venv_name) / "bin" / "python")
+                activate_instruction = f"  source {venv_name}/bin/activate"
+            
+            # Command to install into the venv's Python
+            pip_cmd_venv = [pip_executable_venv, "-m", "pip", "install", "-r", requirements_file]
+            print_info(f"Installing dependencies into '{venv_name}' (using its pip)...")
+            result = subprocess.run(pip_cmd_venv, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                print_success("Dependencies installed successfully into virtual environment.")
+                print_info(f"\nTo use TensorTune from this virtual environment, first activate it:")
+                print(activate_instruction)
+                print(f"Then, from this directory, run TensorTune (e.g., python tensortune_gui.py).")
+                return True # Dependencies installed in venv
+            else:
+                print_error(f"Failed to install dependencies into virtual environment (see output below).")
+                print(f"{YELLOW}Pip Command Used: {' '.join(pip_cmd_venv)}{ENDC}")
+                print(f"{YELLOW}Pip Output:\n{result.stdout}\n{result.stderr}{ENDC}")
+                print_warning(f"Please activate the venv ('{activate_instruction}') and try running: pip install -r {requirements_file}")
+                return False
         else:
-            print_info("Install tkinter by reinstalling Python with the official installer from python.org")
-    
-    return True
+            print_info(f"Virtual environment '{venv_name}' already exists. Skipping creation.")
+            print_warning("If you want to (re)install in this venv, please activate it and run:")
+            print_warning(f"  pip install -r {requirements_file}")
+            print_warning("Or, delete the '{venv_name}' folder and re-run this script.")
+            return True # Indicate user should manage existing venv
+    else: # Install in current environment
+        print_info(f"Installing dependencies into the current Python environment: {sys.executable}")
+        # Check if we are already in a venv
+        if not (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
+            print_warning("Consider using a virtual environment for better project isolation (run this script again and choose option 2).")
+        
+        result = subprocess.run(pip_cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print_success("Dependencies installed successfully.")
+            return True
+        else:
+            print_error(f"Failed to install dependencies (see output below).")
+            print(f"{YELLOW}Pip Command Used: {' '.join(pip_cmd)}{ENDC}")
+            print(f"{YELLOW}Pip Output:\n{result.stdout}\n{result.stderr}{ENDC}")
+            return False
 
-def find_koboldcpp():
-    """Try to find KoboldCpp installation"""
-    print_header("Locating KoboldCpp")
+def check_and_advise_optional_components():
+    """Checks for optional libraries TensorTune can use and advises."""
+    print_header("Step 3: Checking Optional Components & Advising")
     
-    # Common names for KoboldCpp
+    pip_optionals = [
+        ("psutil", "system/process info (CPU threads, process kill)", "psutil"),
+        ("pynvml", "NVIDIA GPU VRAM monitoring (for NVIDIA GPUs)", "pynvml"),
+        ("rich", "enhanced CLI experience", "rich"),
+        ("appdirs", "consistent config/data paths", "appdirs"),
+        ("tkinter", "GUI operation (usually included with Python)", None), # None means not pip-installable directly this way
+        ("wmi", "Windows Management Instrumentation (Windows AMD/fallback GPU info) - Windows Only", "WMI")
+    ]
+
+    special_optionals = [
+        ("pyadlx", "AMD ADLX for detailed AMD GPU info (Windows, requires manual build/AMD SDK)", None), # Manual
+        ("pyze.api", "Intel Level Zero (pyze-l0) for Intel Arc GPU info (may need driver/runtime setup)", "pyze-l0") # pyze.api is what core imports
+    ]
+
+    all_good_flag = True
+    print_info("Checking common optional libraries:")
+    for import_name, purpose, pip_name in pip_optionals:
+        if import_name == "wmi" and platform.system() != "Windows":
+            continue 
+        try:
+            __import__(import_name)
+            print_success(f"{import_name} is available ({purpose}).")
+        except ImportError:
+            if import_name == "tkinter":
+                print_error(f"{import_name} is NOT available but REQUIRED for the GUI ({purpose}).")
+                if platform.system() == "Linux":
+                    print_info("  On Linux, try: sudo apt-get install python3-tk  OR  sudo dnf install python3-tkinter")
+                else:
+                    print_info("  On Windows/macOS, tkinter is usually included with Python. Try reinstalling Python from python.org, ensuring 'tcl/tk and IDLE' is selected.")
+                all_good_flag = False
+            else:
+                print_warning(f"{import_name} not found. Functionality for '{purpose}' may be limited or use fallbacks.")
+                if pip_name:
+                    print_info(f"  Consider installing: pip install {pip_name}")
+    
+    print_info("\nChecking specialized optional libraries (may require manual setup):")
+    for import_name, purpose, pip_name_or_hint in special_optionals:
+        try:
+            __import__(import_name)
+            print_success(f"{import_name if '.' not in import_name else import_name.split('.')[0]} seems to be available ({purpose}).")
+        except ImportError:
+            print_warning(f"{import_name if '.' not in import_name else import_name.split('.')[0]} not found. TensorTune will have limited info for '{purpose}'.")
+            if import_name == "pyadlx":
+                print_info("  PyADLX is for AMD GPUs on Windows and requires manual building with AMD's ADLX SDK.")
+                print_info("  TensorTune will use WMI as a fallback. See README.md for PyADLX details.")
+            elif import_name == "pyze.api": # Matches the pyze-l0 package for core
+                print_info(f"  PyZE (usually package '{pip_name_or_hint}') is for Intel Arc GPUs. Try 'pip install {pip_name_or_hint}'.")
+                print_info("  Requires Intel drivers and Level Zero runtime to be functional.")
+    
+    return all_good_flag
+
+def find_koboldcpp_location():
+    print_header("Step 4: Locating KoboldCpp (Informational)")
     common_names = ["koboldcpp.exe", "koboldcpp", "koboldcpp.py"]
-    if platform.system() != "Windows":
-        common_names.append("./koboldcpp")
+    if platform.system() != "Windows": common_names.append("./koboldcpp")
     
-    # Check current directory
     for name in common_names:
-        if os.path.exists(name):
-            print_success(f"Found KoboldCpp in current directory: {os.path.abspath(name)}")
-            return os.path.abspath(name)
-    
-    # Check in PATH
+        if Path(name).resolve().is_file():
+            print_success(f"Found potential KoboldCpp in current directory: {Path(name).resolve()}")
+            return
     for name in common_names:
-        path = shutil.which(name)
-        if path:
-            print_success(f"Found KoboldCpp in PATH: {path}")
-            return path
-    
-    print_warning("KoboldCpp executable not found automatically.")
-    print_info("You will need to specify the path to KoboldCpp in the launcher settings.")
-    return None
+        found = shutil.which(name)
+        if found:
+            print_success(f"Found potential KoboldCpp in PATH: {Path(found).resolve()}")
+            return
+            
+    print_warning("KoboldCpp executable/script not automatically found.")
+    print_info("  This is okay! You'll set the correct path in TensorTune's settings.")
 
-def check_files():
-    """Check if all required files are present"""
-    print_header("Checking Required Files")
-    
-    required_files = ["tensortune_core.py", "tensortune_cli.py", "tensortune_gui.py"]
-    missing_files = []
-    
-    for file in required_files:
-        if not os.path.exists(file):
-            missing_files.append(file)
-    
-    if missing_files:
-        print_error(f"Missing required files: {', '.join(missing_files)}")
+def check_tensortune_files():
+    print_header("Step 5: Verifying TensorTune Files")
+    required = ["tensortune_core.py", "tensortune_cli.py", "tensortune_gui.py"]
+    missing = [f for f in required if not Path(f).exists()]
+    if missing:
+        print_error(f"Essential TensorTune script(s) missing: {', '.join(missing)}")
         return False
-    
-    print_success("All required files are present")
+    print_success("Essential TensorTune script files are present.")
     return True
 
-def create_launch_scripts():
-    """Create convenient launch scripts"""
-    print_header("Creating Launch Scripts")
-    
-    # Create launcher for CLI
-    cli_script_name = "launch_cli.py" if platform.system() == "Windows" else "launch_cli.sh"
-    
-    if platform.system() == "Windows":
-        cli_content = """#!/usr/bin/env python3
-import os
-import sys
-import subprocess
+def create_launch_scripts_if_wanted():
+    print_header("Step 6: Create Convenience Launch Scripts (Optional)")
+    if not (Path("tensortune_cli.py").exists() and Path("tensortune_gui.py").exists()):
+        print_warning("Core GUI/CLI files missing, cannot create launch scripts.")
+        return
 
-# Run the CLI launcher
-launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tensortune_cli.py")
-subprocess.run([sys.executable, launcher_path])
-"""
-    else:
-        cli_content = """#!/bin/bash
-# Run the CLI launcher
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-python3 "${DIR}/tensortune_cli.py"
-"""
-    
-    with open(cli_script_name, "w") as f:
-        f.write(cli_content)
-    
-    # Make shell script executable on Unix-like systems
-    if platform.system() != "Windows" and cli_script_name.endswith(".sh"):
-        os.chmod(cli_script_name, 0o755)
-    
-    # Create launcher for GUI
-    gui_script_name = "launch_gui.py" if platform.system() == "Windows" else "launch_gui.sh"
-    
-    if platform.system() == "Windows":
-        gui_content = """#!/usr/bin/env python3
-import os
-import sys
-import subprocess
+    python_exe = sys.executable.replace("pythonw.exe", "python.exe")
 
-# Run the GUI launcher
-launcher_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tensortune_gui.py")
-subprocess.run([sys.executable, launcher_path])
+    scripts_to_create = {
+        "launch_tensortune_cli": ("tensortune_cli.py", f"# Launches TensorTune CLI v{CURRENT_TENSORTUNE_VERSION}"),
+        "launch_tensortune_gui": ("tensortune_gui.py", f"# Launches TensorTune GUI v{CURRENT_TENSORTUNE_VERSION}")
+    }
+
+    for base_name, (target_script, header_comment) in scripts_to_create.items():
+        if platform.system() == "Windows":
+            script_filename = f"{base_name}.bat"
+            content = f'@echo off\nrem {header_comment.lstrip("#").strip()}\n"{python_exe}" "%~dp0{target_script}" %*\nif "%1"=="-nc" (exit /b)\npause'
+            if "gui" in base_name: # No pause for GUI by default
+                 content = f'@echo off\nrem {header_comment.lstrip("#").strip()}\n"{python_exe}" "%~dp0{target_script}" %*'
+        else:
+            script_filename = f"{base_name}.sh"
+            content = f"""#!/bin/sh
+{header_comment}
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+"{python_exe}" "$DIR/{target_script}" "$@"
 """
-    else:
-        gui_content = """#!/bin/bash
-# Run the GUI launcher
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-python3 "${DIR}/tensortune_gui.py"
-"""
-    
-    with open(gui_script_name, "w") as f:
-        f.write(gui_content)
-    
-    # Make shell script executable on Unix-like systems
-    if platform.system() != "Windows" and gui_script_name.endswith(".sh"):
-        os.chmod(gui_script_name, 0o755)
-    
-    print_success(f"Created CLI launcher: {cli_script_name}")
-    print_success(f"Created GUI launcher: {gui_script_name}")
-    return True
+        try:
+            with open(script_filename, "w", newline='\n') as f: f.write(content)
+            if platform.system() != "Windows": os.chmod(script_filename, 0o755)
+            print_success(f"Created launch script: {script_filename}")
+        except IOError as e:
+            print_error(f"Could not create {script_filename}: {e}")
+
+def confirm_yes_no(prompt_text, default_yes=True):
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    while True:
+        choice = input(f"{prompt_text} {suffix}: ").strip().lower()
+        if not choice: return default_yes
+        if choice in ['y', 'yes']: return True
+        if choice in ['n', 'no']: return False
+        print_warning("Please answer 'yes' or 'no'.")
 
 def main():
-    """Main installation function"""
-    print(f"\n{BOLD}{BLUE}TensorTune - Installation{ENDC}\n")
+    print(f"\n{BOLD}{BLUE}TensorTune v{CURRENT_TENSORTUNE_VERSION} - Installation Helper{ENDC}\n")
     
-    # Check Python version
-    if not check_python_version():
-        sys.exit(1)
+    if not check_python_version(): sys.exit(1)
+    if not check_tensortune_files(): sys.exit(1)
+    if not generate_requirements_file_if_needed():
+        print_warning("Proceeding without requirements.txt. Dependency installation might fail.")
+
+    print_header("Dependency Installation Choice")
+    print("1. Install into current Python environment (simple, if not using many projects).")
+    print("2. Create 'tensortune_env' virtual environment and install (recommended for isolation).")
+    print("3. Skip automatic dependency installation (manual install from requirements.txt needed).")
     
-    # Check required files
-    if not check_files():
-        print_warning("Some required files are missing. Please download the complete package.")
-        cont = input("Continue anyway? (y/n): ").lower().strip()
-        if cont != 'y':
-            sys.exit(1)
+    dep_choice = ""
+    while dep_choice not in ["1", "2", "3"]:
+        dep_choice = input("Choice (1-3) [default: 1]: ").strip() or "1"
+
+    deps_ok = False
+    if dep_choice == "1": deps_ok = install_dependencies_from_file(create_venv=False)
+    elif dep_choice == "2":
+        deps_ok = install_dependencies_from_file(create_venv=True)
+        if Path("tensortune_env").exists() and deps_ok:
+            print_info(f"\n{BOLD}IMPORTANT: Virtual environment 'tensortune_env' was used/created.{ENDC}")
+            print_info("You MUST activate it before running TensorTune.")
+            act_cmd = "tensortune_env\\Scripts\\activate" if platform.system() == "Windows" else "source tensortune_env/bin/activate"
+            print_info(f"  To activate: {BOLD}{act_cmd}{ENDC}")
+            print_header("Next Steps"); print_success("Setup for venv complete. Activate it, then run TensorTune."); sys.exit(0)
+    elif dep_choice == "3":
+        print_info("Skipping auto dependency install. Ensure manual install from requirements.txt."); deps_ok = True
+
+    if not deps_ok and dep_choice != "3":
+        print_error("Dependency installation encountered issues. Review messages above.")
     
-    # Installation options
-    print_header("Installation Options")
-    print("1. Install in current Python environment")
-    print("2. Create a virtual environment and install")
-    print("3. Exit")
+    check_and_advise_optional_components()
+    find_koboldcpp_location()
     
-    choice = input("\nEnter your choice (1-3): ").strip()
+    if confirm_yes_no("\nCreate convenience launch scripts (e.g., launch_tensortune_gui.bat)?", default_yes=True):
+        create_launch_scripts_if_wanted()
     
-    if choice == '1':
-        create_venv = False
-    elif choice == '2':
-        create_venv = True
-    else:
-        print_info("Installation cancelled.")
-        sys.exit(0)
-    
-    # Install dependencies
-    if not install_dependencies(create_venv):
-        if create_venv:
-            # If we just created a venv, exit because user needs to activate it
-            sys.exit(0)
+    print_header("Setup Summary")
+    print(f"{GREEN}{BOLD}TensorTune v{CURRENT_TENSORTUNE_VERSION} setup helper finished.{ENDC}")
+    if dep_choice != "2":
+        if deps_ok or dep_choice == "3":
+            print_info("You should now be able to run TensorTune.")
+            print_info("Use created launch scripts or run python tensortune_gui.py / tensortune_cli.py")
         else:
-            print_error("Failed to install dependencies. Please try again or install manually.")
-            sys.exit(1)
-    
-    # Check optional dependencies
-    check_optional_dependencies()
-    
-    # Find KoboldCpp
-    koboldcpp_path = find_koboldcpp()
-    
-    # Create launch scripts
-    create_launch_scripts()
-    
-    # Installation complete
-    print_header("Installation Complete")
-    
-    if koboldcpp_path:
-        print_success(f"KoboldCpp found at: {koboldcpp_path}")
-    else:
-        print_warning("KoboldCpp not found. You'll need to set the path in the launcher settings.")
-    
-    print_info("To run the launcher:")
-    if platform.system() == "Windows":
-        print("  - CLI: python launch_cli.py")
-        print("  - GUI: python launch_gui.py")
-    else:
-        print("  - CLI: ./launch_cli.sh")
-        print("  - GUI: ./launch_gui.sh")
-    
-    print(f"\n{GREEN}{BOLD}Installation completed successfully!{ENDC}\n")
+            print_error("Some steps had issues. Please review output.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt: print_error("\nInstallation cancelled by user."); sys.exit(1)
+    except Exception as e:
+        print_error(f"\nAn unexpected error during installation: {e}"); import traceback; traceback.print_exc(); sys.exit(1)

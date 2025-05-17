@@ -3,269 +3,170 @@
 TensorTune is a user-friendly toolkit for efficiently running KoboldCpp, intelligently managing VRAM usage through optimized tensor offload strategies to maximize performance on consumer GPUs. Available in both GUI and CLI versions.
 
 ![TensorTune GUI](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI1.png)
+_(TensorTune v1.1.0 GUI showing the main tuning interface)_
 
 ## 🚀 Performance Examples with TensorTune
 
-Here are some real-world examples of performance improvements using tensor offloading:
+TensorTune helps you achieve significant performance gains by intelligently offloading parts of your model. Here's what's possible (examples use manually crafted commands that TensorTune helps you discover):
 
-### Example 1: QwQ Merge on 12GB VRAM GPU
+### Example 1: Qwen3-32B on RTX 3060 (12GB)
+-   **Traditional:** ~3.98 t/s
+-   **With Smart Tensor Offloading:** ~10.61 t/s (Approx. **+166%** speed)
+    ```bash
+    # Example command that TensorTune can help derive:
+    python koboldcpp.py --model Qwen3-32B-Q4_K_M.gguf --gpulayers 65 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU" ...
+    ```
 
-**Traditional Layer Offloading:**
-```bash
-python koboldcpp.py --threads 6 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 59 --quantkv 1
-```
+### Example 2: Gemma3-27B on RTX 2060 (6GB)
+-   **Traditional:** ~6.86 t/s
+-   **With Smart Tensor Offloading:** ~10.4 t/s (Approx. **+52%** speed)
+    ```bash
+    # Example command:
+    python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --gpulayers 99 --overridetensors "\.(5[3-9]|6[0-3])\.(ffn_*)=CPU" ...
+    ```
 
-Tokens per second: 3.95 t/s
-
-**With TensorTune's Smart Tensor Offloading:**
-```bash
-python koboldcpp.py --threads 10 --usecublas --contextsize 40960 --flashattention --port 5000 --model MODELNAME.gguf --gpulayers 65 --quantkv 1 --overridetensors "\.[13579]\.ffn_up|\.[1-3][13579]\.ffn_up=CPU"
-```
-
-Tokens per second: 10.61 t/s
-
-**Result:** 168% speed improvement while using the same amount of VRAM!
-
-### Example 2: Qwen3-30B A3B on RTX 4060 Ti (16GB)
-
-**Traditional Layer Offloading:**
-
-Offloading 30 layers
-```bash
-python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 30
-```
-
-Tokens per second: 10 t/s
-
-**With TensorTune's Smart Tensor Offloading:**
-
-All layers on GPU with tensor offloading
-```bash
-python koboldcpp.py --model Qwen3-30B-A3B-Q4_K_M.gguf --usecublas --gpulayers 99 --overridetensors "blk\.([0-9]*[02468])\.ffn_.*_exps\.=CPU"
-```
-
-Tokens per second: 15 t/s
-
-**Result:** 50% speed improvement with better model quality!
-
-### Example 3: Gemma3-27B on 16GB VRAM GPU
-
-**Traditional Layer Offloading:**
-
-Baseline with 46 layers offloaded
-```bash
-python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 46
-```
-
-Tokens per second: 6.86 t/s
-
-**With TensorTune's Smart Tensor Offloading:**
-
-All layers on GPU with selective tensor offloading
-```bash
-python koboldcpp.py --model gemma3-27b-IQ4_XS.gguf --contextsize 16384 --flashattention --gpulayers 99 --overridetensors "\.(5[3-9]|6[0-3])\.(ffn_*)=CPU"
-```
-
-Tokens per second: 10.4 t/s
-
-**Result:** 52% speed improvement with the same VRAM usage!
-
-### Example 4: Qwen3-235B MoE on Dual Xeon with 60GB VRAM
-
-**Traditional Layer Offloading:**
-
-Standard approach
-```bash
-python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95
-```
-
-Tokens per second: 2.9 t/s
-
-**With TensorTune's Smart Tensor Offloading:**
-
-Using tensor-specific offloading
-```bash
-python koboldcpp.py --model Qwen3-235B-IQ4_XS.gguf --contextsize 32768 --flashattention --gpulayers 95 --overridetensors "([4-9]+).ffn_.*_exps.=CPU"
-```
-
-Tokens per second: 4.2 t/s
-
-**Result:** 45% speed improvement while maintaining all 95 layers on GPU!
+### Example 3: Mixtral-8x7B MoE on RTX 4070 (12GB)
+-   **Traditional:** ~15.3 t/s
+-   **With Smart Tensor Offloading (MoE focused):** ~24.7 t/s (Approx. **+61%** speed)
+    ```bash
+    # Example command:
+    python koboldcpp.py --model mixtral-8x7b-v0.1.Q5_K_M.gguf --gpulayers 32 --overridetensors "ffn_.*_exps=CPU" ...
+    ```
+*(Full example commands and more details can be found in `tensortune_examples.py`)*
 
 ## 📋 Features
 
-- **Intelligent Auto-Tuning:** Automatically finds optimal tensor offload strategies.
-- **Multiple Launch Options:** Direct launch, best remembered config, or full auto-tuning.
-- **VRAM Monitoring:** Real-time display of GPU VRAM usage, with support for vendor-specific selection and manual override.
-- **Configuration Management:** Global, model-specific, and session-based settings. Configurable data/config paths.
-- **Database-Backed History:** Remembers what worked best for each model.
-- **Process Management:** Easily start and stop KoboldCpp instances.
-- **Both CLI and GUI:** Choose the interface that suits your preference.
-- **Dynamically Adjusts GPU Layers:** Coordinates GPU layer counts with tensor offload levels for maximum performance.
-- **Export/Import Settings:** Backup and share your TensorTune configurations.
+-   **Intelligent Auto-Tuning:** Automatically finds optimal tensor offload strategies (OT Levels) based on your hardware and model.
+-   **New in 1.1.0: "Set as Preferred" Strategy:** Mark your best-performing tuned configurations for easy recall.
+-   **Multiple Launch Options:** Direct launch, best remembered config, or full auto-tuning.
+-   **VRAM Monitoring:** Real-time display of GPU VRAM usage, with support for vendor-specific selection and manual override.
+-   **Configuration Management:** Global, model-specific, and session-based settings. Configurable data/config paths using `appdirs` if available.
+-   **Database-Backed History:** Remembers what worked best for each model.
+-   **Process Management:** Easily start and stop KoboldCpp instances.
+-   **Both CLI and GUI:** Choose the interface that suits your preference.
+-   **Dynamically Adjusts GPU Layers:** Coordinates GPU layer counts with tensor offload levels for maximum performance.
+-   **Export/Import Settings:** Backup and share your TensorTune configurations.
+-   **GUI Enhancements:** Scrollable tuning page, improved layouts, clearer VRAM display, and more robust operation.
 
 ## 🔧 Installation of TensorTune
 
 ### Quick Start
 
-1. Ensure you have Python 3.7+ installed.
+1.  Ensure you have Python 3.8+ installed (Python 3.7 may work but 3.8+ is recommended for GUI stability).
+2.  Download or clone this repository:
+    ```bash
+    git clone https://github.com/Viceman256/TensorTune.git
+    cd TensorTune
+    ```
+3.  Run the installation script:
+    ```bash
+    python install.py 
+    # On Linux/macOS, you might use: python3 install.py
+    ```
+    The script will guide you through:
+    - Checking Python version.
+    - Creating/updating `requirements.txt`.
+    - Installing necessary Python packages (optionally in a virtual environment).
+    - Checking for optional components and advising on their setup.
+    - Creating convenient launch scripts (e.g., `launch_tensortune_gui.bat` or `./launch_tensortune_gui.sh`).
 
-2. Download or clone this repository:
+### Dependencies
 
-```bash
-git clone https://github.com/Viceman256/TensorTune.git
-cd TensorTune
-```
+Key dependencies are listed in `requirements.txt`. Core ones include:
+-   `customtkinter` (for GUI)
+-   `psutil` (system info)
+-   `pynvml` (NVIDIA GPU info)
+-   `rich` (enhanced CLI)
+-   `appdirs` (config paths)
 
-3. Run the installation script:
+#### Dependencies for Advanced GPU Information (Optional)
+TensorTune can leverage platform-specific libraries for more detailed GPU metrics. These are generally optional and TensorTune will show an informational message if they are relevant but not found.
 
-```bash
-python tensortune_install.py
-```
-
-The script will:
-- Check for required dependencies.
-- Install necessary Python packages from requirements.txt.
-- Prompt for your KoboldCpp installation path if not found.
-- Create convenient launch scripts (launch_cli.sh/.py, launch_gui.sh/.py).
-
-### Manual Installation
-
-If you prefer to install manually:
-
-1. Install required dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-2. Ensure all core files are in the same directory:
-   - tensortune_core.py
-   - tensortune_cli.py
-   - tensortune_gui.py
-   - tensortune_examples.py
-   - tensortune_install.py
-   - requirements.txt
-
-3. Run TensorTune:
-
-```bash
-# For GUI
-python tensortune_gui.py
-
-# For CLI
-python tensortune_cli.py
-```
+-   **NVIDIA:** `pynvml` (install via `pip install pynvml`). Requires NVIDIA drivers.
+-   **AMD (Windows - PyADLX):** For the most detailed AMD GPU info, TensorTune can use `PyADLX`.
+    *   **Nature:** This is **not a standard pip-installable package**. It requires Python bindings to be manually built against AMD's ADLX SDK, which is usually part of the AMD Adrenalin Software.
+    *   **Guidance:** Refer to [AMD's Official Python Binding Guide for ADLX](https://gpuopen.com/manuals/adlx/adlx-page_guide_bindpy/) for build instructions.
+    *   **Fallback:** If PyADLX is not found, TensorTune uses WMI on Windows for AMD GPU info.
+-   **Intel (PyZE):** For detailed Intel Arc GPU info, TensorTune uses `pyze-l0`.
+    *   **Installation:** Try `pip install pyze-l0`.
+    *   **Requirements:** This typically needs up-to-date Intel drivers and the Level Zero runtime.
+-   **Windows Fallback (WMI):** For general GPU info on Windows, especially if vendor-specific libraries are unavailable.
+    *   **Installation:** `pip install WMI`.
 
 ## 📚 Using TensorTune
 
-TensorTune automatically creates and manages its configuration files and history database in your user-specific application data/configuration directory (e.g., ~/.config/TensorTune on Linux, AppData/Roaming/TensorTune on Windows).
+TensorTune automatically creates and manages its configuration files (`tensortune_config.json`) and history database (`tensortune_history.db`) in your user-specific application directory (e.g., `~/.config/TensorTune` on Linux, `AppData/Roaming/TensorTune/Config` and `AppData/Local/TensorTune/Data` on Windows, managed by `appdirs` if available).
 
-### GUI Version
+### GUI Version (`tensortune_gui.py` or launch script)
+The GUI offers a comprehensive interface with tabs for "Tune & Launch," "Settings," and "History."
+-   **Tune & Launch:** Select models, monitor VRAM, and initiate tuning sessions or direct launches.
+-   **Auto-Tuning Session:** Interactively adjust Tensor Offload (OT) Levels, launch & monitor KoboldCpp, view live output, and save or mark preferred configurations. The tuning page is now scrollable for better usability.
+-   **Settings:** Configure KoboldCpp path, global/model-specific arguments, GPU selection & VRAM override, UI theme, and manage config import/export.
+-   **History:** Review past launches and their performance.
 
-The application has three main tabs:
-
-#### Main Tab: Tune & Launch
-- Select your GGUF model.
-- Monitor VRAM usage (reflects selected GPU and override settings).
-- Choose a launch method:
-  - Auto-Tune / Use OT Strategy (recommended).
-  - Launch Best Remembered Config.
-  - Direct Launch with Settings Defaults.
-- Stop any running KoboldCpp processes.
-
-#### Auto-Tuning Session Mode
-- View and adjust the current tensor offload strategy (OT Level).
-- Launch and monitor KoboldCpp for testing. Output is displayed in the GUI.
-- Make adjustments based on results (more GPU/CPU offload).
-- Save successful configurations to the history database.
-- Edit session or permanent base arguments for the model.
-
-#### Settings Tab
-- Set KoboldCpp executable path.
-- Configure global default arguments for KoboldCpp.
-- GPU Management: Select target GPU type and ID for VRAM monitoring.
-- VRAM Override: Manually set the total VRAM budget for launcher calculations.
-- Choose UI theme (Dark/Light/System).
-- Manage Model-Specific argument overrides.
-- Export/Import TensorTune settings.
-- Reset all settings to default.
-
-#### History Tab
-- View past launch attempts.
-- See which configurations worked best, filtered by model or globally.
-
-### CLI Version
-
-The CLI offers an interactive text-based interface with similar functionality:
-- Select a GGUF model.
-- Choose between auto-tuning or direct launch.
-- Follow the prompts to adjust settings and launch KoboldCpp.
-- View launch history and performance statistics.
-- Access "Launcher Settings" to configure paths, GPU targets, VRAM overrides, and default arguments.
+### CLI Version (`tensortune_cli.py` or launch script)
+The CLI provides an interactive text-based experience for all core TensorTune functionalities, including model selection, tuning, launching, settings management, and history review.
 
 ## 📝 Understanding Tensor Offloading
 
-Traditional layer offloading moves entire transformer layers between CPU and GPU. Tensor offloading is more granular - it selectively keeps specific tensors (like FFN up/down/gate) on CPU while keeping smaller, computation-intensive tensors (like attention) on GPU.
+Traditional layer offloading moves entire transformer layers between CPU and GPU. Smart Tensor Offloading, which TensorTune facilitates, is more granular. It allows specific, often large, tensors within layers (like parts of the Feed-Forward Network) to be moved to CPU RAM, while keeping the more compute-intensive tensors (like attention mechanisms) on the GPU. This often allows more layers to be primarily processed by the GPU, significantly boosting performance on VRAM-constrained hardware.
 
-TensorTune helps you find the optimal balance by:
-- Analyzing your model's characteristics (size, layers, MoE).
-- Testing different offloading patterns (OT Levels).
-- Monitoring VRAM usage and load success/failure.
-- Remembering what works best for each model based on your hardware and available VRAM.
+TensorTune helps by:
+- Analyzing model characteristics (size, layers, MoE architecture).
+- Systematically testing different offloading patterns (OT Levels).
+- Monitoring VRAM usage and KoboldCpp load success/failure.
+- Remembering what works best for each model and your hardware.
 
 ## 🔍 Troubleshooting
 
-- **KoboldCpp Not Found:** Set the correct path in the Settings tab (GUI) or Launcher Settings (CLI).
-- **Python Errors:** Ensure you've installed all dependencies from requirements.txt.
-- **VRAM Info Not Displaying:** Install pynvml for NVIDIA GPU monitoring, ensure AMD/Intel drivers and necessary libraries (pyadlx, rocm-smi, pyze) are correctly set up if applicable. Check GPU selection settings.
-- **Auto-Tuning Fails:** Try reducing context size or other memory-intensive settings. Manually adjust the OT Level towards more CPU offload.
+-   **KoboldCpp Not Found:** Ensure the path to your `koboldcpp.exe` (or `.py` script / Linux executable) is correctly set in TensorTune's Settings.
+-   **Python Errors / Module Not Found:** Run `python install.py` again or manually install dependencies from `requirements.txt` (e.g., `pip install -r requirements.txt`). Ensure you are in the correct Python environment if using one.
+-   **VRAM Info Not Displaying or "PyADLX/PyZE not found":**
+    -   **NVIDIA:** Ensure `pynvml` is installed (`pip install pynvml`) and your NVIDIA drivers are up to date.
+    -   **AMD (Windows):** The "PyADLX (AMD) library not found" message is usually informational. PyADLX requires a manual build (see "Dependencies for Advanced GPU Information" above). TensorTune will use WMI as a fallback.
+    -   **Intel:** The "PyZE (Intel Level Zero) not found" message indicates the `pyze-l0` library isn't installed or its underlying dependencies (drivers, Level Zero runtime) are missing. Try `pip install pyze-l0`.
+    -   **General:** Check GPU selection settings within TensorTune.
+-   **Auto-Tuning Fails Repeatedly:** Try reducing KoboldCpp's context size or other memory-intensive settings in TensorTune's global or model-specific arguments. Manually adjust the OT Level towards more CPU offload.
 
 ## 🙏 Acknowledgments
-
-This project was inspired by the tensor offloading technique shared on Reddit. TensorTune aims to make this optimization method accessible and manageable for more users.
+This project leverages the powerful tensor offloading capabilities of KoboldCpp. TensorTune aims to make these advanced optimizations more accessible. Inspired by community discussions on maximizing LLM performance.
 
 ## 📜 License
-
-This project is licensed under the MIT License - see the LICENSE.md file for details.
+This project is licensed under the MIT License - see the `LICENSE.md` file for details.
 
 ## 📸 Screenshots
+*(Screenshots like CLI Example 1, GUI Tuning Session, etc. are linked here in the original README - ensure your image paths are correct if you've moved them)*
 
-CLI Example 1
+CLI Main Menu & Model Selection:
+![TensorTune CLI Main Menu](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli1.png)
 
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli1.png)
+CLI Tuning Session:
+![TensorTune CLI Tuning Session](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli2.png)
 
-CLI Example 2
+GUI Main Tab (Tune & Launch):
+![TensorTune GUI Main Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI1.png)
 
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli2.png)
+GUI Auto-Tuning Session (Scrollable):
+![TensorTune GUI Tuning Session](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI2.png)
 
-GUI Example 1 (Main Tab)
+GUI Settings Tab:
+![TensorTune GUI Settings Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI3.png)
 
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI1.png)
+GUI History Tab:
+![TensorTune GUI History Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
 
-GUI Example 2 (Tuning Session)
-
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI2.png)
-
-GUI Example 3 (Settings Tab)
-
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
-
-GUI Example 4 (History Tab)
-
-![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI6.png)
 
 ## Latest Release: TensorTune v1.1.0
 
 Key changes in this version include:
-- New "Set as Preferred" tuning strategy feature.
-- Scrollable auto-tuning session page in the GUI.
-- Enhanced GPU detection, error handling, and VRAM display.
-- Numerous bug fixes for CLI and GUI for improved stability and UX.
-- Better KCPP integration and configuration management.
+-   New "Set as Preferred" tuning strategy feature in the GUI.
+-   Scrollable auto-tuning session page in the GUI for better usability.
+-   Enhanced GPU detection (SysFS fallbacks, PyADLX/PyZE info), error handling, and VRAM display logic.
+-   Numerous bug fixes for both CLI and GUI leading to improved stability and user experience.
+-   More robust KoboldCpp integration and configuration management.
+-   Updated installation script and dependency guidance.
 
-For a full list of changes, see the v1.1.0 Release Notes on GitHub or the CHANGELOG.md.
+For a full list of changes, see the v1.1.0 Release Notes on GitHub or the `CHANGELOG.md` file.
 
 ## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions, bug reports, and feature suggestions are welcome! Please feel free to open an issue or submit a Pull Request.
