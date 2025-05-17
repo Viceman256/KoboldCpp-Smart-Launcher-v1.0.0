@@ -149,10 +149,10 @@ GUI Auto-Tuning Session (Scrollable):
 ![TensorTune GUI Tuning Session](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI2.png)
 
 GUI Settings Tab:
-![TensorTune GUI Settings Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI3.png)
+![TensorTune GUI Settings Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
 
 GUI History Tab:
-![TensorTune GUI History Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
+![TensorTune GUI History Tab](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI6.png)
 
 
 ## Latest Release: TensorTune v1.1.0
