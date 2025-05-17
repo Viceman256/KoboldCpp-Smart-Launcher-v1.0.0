@@ -135,7 +135,6 @@ This project leverages the powerful tensor offloading capabilities of KoboldCpp.
 This project is licensed under the MIT License - see the `LICENSE.md` file for details.
 
 ## 📸 Screenshots
-*(Screenshots like CLI Example 1, GUI Tuning Session, etc. are linked here in the original README - ensure your image paths are correct if you've moved them)*
 
 CLI Main Menu & Model Selection:
 ![TensorTune CLI Main Menu](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/cli1.png)
