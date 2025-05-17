@@ -1673,49 +1673,77 @@ def main_cli():
         print_info(f"  VRAM Budget Override Active: Total {gpu_info_data_rich.get('total_mb_budgeted',0):.0f}MB")
 
     # 5. Conditionally Print Library Status Warnings
-    show_lib_warnings_on_startup = True
+    show_optional_lib_warnings = True
     if CONFIG.get("first_run_completed", False) and CONFIG.get("suppress_optional_lib_warnings", False):
-        show_lib_warnings_on_startup = False
+        show_optional_lib_warnings = False
 
-    if show_lib_warnings_on_startup:
-        print_info("Checking status of optional support libraries (can be suppressed in settings after first run):")
-        optional_libs_to_check_status = {
-            "PyADLX (AMD)": tensortune_core.pyadlx_load_error_reason,
-            "WMI (Windows)": tensortune_core.wmi_load_error_reason,
-            "PyZE (Intel)": tensortune_core.pyze_load_error_reason,
-            "Appdirs": tensortune_core.appdirs_load_error_reason,
-            "Metal (Apple)": tensortune_core.metal_load_error_reason,
-        }
-        any_optional_warnings_printed = False
-        for lib_name, error_reason in optional_libs_to_check_status.items():
-            if error_reason:
-                if lib_name == "WMI (Windows)" and platform.system() != "win32": continue
-                if lib_name == "Metal (Apple)" and platform.system() != "darwin": continue
-                print_warning(f"  ! {lib_name}: {error_reason}")
-                any_optional_warnings_printed = True
-        
-        critical_issues_found = False
-        if tensortune_core.psutil_load_error_reason:
-            print_error(f"  CRITICAL! Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)")
-            critical_issues_found = True
-        if CONFIG.get("gpu_detection", {}).get("nvidia", True) and tensortune_core.pynvml_load_error_reason:
+    # Get detected GPU type to make warnings more relevant
+    detected_gpu_type_str = ""
+    if gpu_info_data_rich and gpu_info_data_rich.get("success"):
+        detected_gpu_type_str = gpu_info_data_rich.get("type", "").lower() # e.g., "nvidia", "amd", "intel", "apple_metal"
+
+    # Always check and print these as they are general or critical
+    critical_issues_found_overall = False
+    if tensortune_core.appdirs_load_error_reason:
+        # Appdirs is always relevant if it fails
+        if show_optional_lib_warnings: # Only show if not suppressed (as it's "optional" for core func but good for user)
+            print_warning(f"  ! Appdirs: {tensortune_core.appdirs_load_error_reason} (Impacts default config/data paths)")
+        critical_issues_found_overall = True # Consider it noteworthy enough to track
+
+    if tensortune_core.psutil_load_error_reason:
+        print_error(f"  CRITICAL! Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)")
+        critical_issues_found_overall = True
+
+    # Vendor-specific library checks
+    any_vendor_specific_warnings_printed = False
+
+    # NVIDIA
+    if CONFIG.get("gpu_detection", {}).get("nvidia", True): # If NVIDIA detection is enabled
+        if tensortune_core.pynvml_load_error_reason:
             print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
-            critical_issues_found = True
+            critical_issues_found_overall = True
+            any_vendor_specific_warnings_printed = True
+        elif show_optional_lib_warnings and detected_gpu_type_str == "nvidia":
+            # This 'else' could be a "PyNVML OK for your NVIDIA GPU" if no error, but might be too verbose.
+            pass 
 
-        if not any_optional_warnings_printed and not critical_issues_found and CONFIG.get("first_run_completed", False):
-            print_success("  All checked optional and critical support libraries seem to be available or not applicable for your setup.")
-            
-    elif CONFIG.get("first_run_completed", False):
+    # AMD
+    if CONFIG.get("gpu_detection", {}).get("amd", True) and platform.system() == "win32":
+        if tensortune_core.pyadlx_load_error_reason:
+            if show_optional_lib_warnings or detected_gpu_type_str == "amd": # Show if AMD detected or if warnings are generally on
+                print_warning(f"  ! PyADLX (AMD): {tensortune_core.pyadlx_load_error_reason}")
+                any_vendor_specific_warnings_printed = True
+        if tensortune_core.wmi_load_error_reason: # WMI is a fallback for AMD on Windows
+             if show_optional_lib_warnings or detected_gpu_type_str == "amd" or not detected_gpu_type_str: # Show if AMD, no GPU, or warnings on
+                print_warning(f"  ! WMI (Windows Fallback for AMD/Other): {tensortune_core.wmi_load_error_reason}")
+                any_vendor_specific_warnings_printed = True
+    elif CONFIG.get("gpu_detection", {}).get("amd", True) and platform.system() != "win32":
+        # For AMD on Linux/macOS, rocm-smi is used by core but doesn't have a direct import check here.
+        # The gpu_info_data_rich.message would reflect rocm-smi issues.
+        pass
+
+    # Intel
+    if CONFIG.get("gpu_detection", {}).get("intel", True):
+        if tensortune_core.pyze_load_error_reason:
+            if show_optional_lib_warnings or "intel" in detected_gpu_type_str: # Show if Intel detected or if warnings are on
+                print_warning(f"  ! PyZE (Intel): {tensortune_core.pyze_load_error_reason}")
+                any_vendor_specific_warnings_printed = True
+
+    # Apple
+    if CONFIG.get("gpu_detection", {}).get("apple", True) and platform.system() == "darwin":
+        if tensortune_core.metal_load_error_reason:
+            if show_optional_lib_warnings or "apple" in detected_gpu_type_str or "metal" in detected_gpu_type_str: # Show if Apple detected or if warnings on
+                print_warning(f"  ! Metal (Apple): {tensortune_core.metal_load_error_reason}")
+                any_vendor_specific_warnings_printed = True
+
+    # Summary message if warnings were suppressed or if everything relevant was okay
+    if not show_optional_lib_warnings and CONFIG.get("first_run_completed", False):
         print_info("Optional library status warnings are currently suppressed (configurable in settings).")
-        critical_issues_found_suppressed_mode = False
-        if tensortune_core.psutil_load_error_reason:
-            print_error(f"  CRITICAL! Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)")
-            critical_issues_found_suppressed_mode = True
-        if CONFIG.get("gpu_detection", {}).get("nvidia", True) and tensortune_core.pynvml_load_error_reason:
-            print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
-            critical_issues_found_suppressed_mode = True
-        if critical_issues_found_suppressed_mode:
-            print_warning("  Note: Above CRITICAL library issues are always shown even if optional warnings are suppressed.")
+        if critical_issues_found_overall: # Re-iterate critical issues if any
+             print_warning("  Note: CRITICAL library issues (like Psutil/PyNVML if applicable) are always shown above.")
+    elif not any_vendor_specific_warnings_printed and not critical_issues_found_overall and CONFIG.get("first_run_completed", False):
+        # This message now only prints if no optional *relevant* warnings were shown and no criticals.
+        print_success("  All relevant optional and critical support libraries for your detected hardware seem to be available or their absence is not critical.")
 
     # 6. Print KoboldCpp Capabilities
     kcpp_caps = core_init_data.get("koboldcpp_capabilities", {})

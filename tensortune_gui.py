@@ -90,40 +90,41 @@ class KoboldLauncherGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("TensorTune (GUI Edition v1.0.1)")
+        self.title("TensorTune (GUI Edition v1.1.0)") # Assuming v1.1.0 now
         self.geometry("950x880")
         self.minsize(900, 780)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        # --- Block 1: Core Initialization & Basic Config/Attribute Setup ---
         core_init_results = tensortune_core.initialize_launcher()
         self.config = core_init_results["config"]
+        # Ensure all necessary self.config keys have defaults if not present
         self.config.setdefault("gpu_selection_mode", tensortune_core.DEFAULT_CONFIG_TEMPLATE["gpu_selection_mode"])
         self.config.setdefault("selected_gpu_index", tensortune_core.DEFAULT_CONFIG_TEMPLATE["selected_gpu_index"])
         self.config.setdefault("override_vram_budget", tensortune_core.DEFAULT_CONFIG_TEMPLATE["override_vram_budget"])
         self.config.setdefault("manual_vram_total_mb", tensortune_core.DEFAULT_CONFIG_TEMPLATE["manual_vram_total_mb"])
         self.config.setdefault("default_gguf_dir", tensortune_core.DEFAULT_CONFIG_TEMPLATE["default_gguf_dir"])
         self.config.setdefault("last_used_gguf_dir", tensortune_core.DEFAULT_CONFIG_TEMPLATE["last_used_gguf_dir"])
+        self.config.setdefault("model_specific_args", {}) # Ensure this exists
 
         self.system_info = core_init_results["system_info"]
-        self.gpu_info = core_init_results["gpu_info"]
+        self.gpu_info = core_init_results["gpu_info"] # self.gpu_info is set here
         self.koboldcpp_capabilities = core_init_results.get("koboldcpp_capabilities", {})
-
-        if "model_specific_args" not in self.config:
-            self.config["model_specific_args"] = {}
 
         self.settings_dirty = False
         self.current_model_path = None
         self.process_running = False
         self.model_analysis_info = {}
         self.last_process = None
-        self.db_path = self.config["db_file"]
+        self.db_path = self.config["db_file"] # Use loaded config for db_path
         self.default_model_dir = self.config.get("default_gguf_dir", "")
-        self.koboldcpp_executable = self.config.get("koboldcpp_executable", "")
+        self.koboldcpp_executable = self.config.get("koboldcpp_executable", "") # Use loaded config
 
         self.tuning_in_progress = False
         self.current_tuning_attempt_level = 0
+        # ... (rest of your tuning and KCPP monitor attribute initializations) ...
         self.current_tuning_min_level = 0
         self.current_tuning_max_level = 0
         self.current_tuning_session_base_args = {}
@@ -131,9 +132,8 @@ class KoboldLauncherGUI(ctk.CTk):
         self.current_tuning_model_path = None
         self.level_of_last_monitored_run = 0
         self.current_command_list_for_db = []
-        self.vram_at_decision_for_db = None
+        self.vram_at_decision_for_db = None # Note: This is distinct from the CLI's handling
         self.user_requested_stop_monitoring = False
-
         self.kcpp_monitor_thread = None
         self.kcpp_process_obj = None
         self.kcpp_success_event = threading.Event()
@@ -146,16 +146,19 @@ class KoboldLauncherGUI(ctk.CTk):
         self.last_free_vram_after_load_mb = None
         self.last_successful_monitored_run_details_gui = None
 
+        # CTk Variables for UI elements
         self.gpu_selection_mode_var = ctk.StringVar(value=self.config.get("gpu_selection_mode", "auto"))
-        self.selected_gpu_id_display_var = ctk.StringVar(value="N/A (Auto-Detect)")
+        self.selected_gpu_id_display_var = ctk.StringVar(value="N/A (Auto-Detect)") # Default display
         self.override_vram_var = ctk.BooleanVar(value=self.config.get("override_vram_budget", False))
 
+        # UI Appearance
         appearance_mode = self.config.get("color_mode", "dark").lower()
         if appearance_mode not in ["dark", "light", "system"]:
-            appearance_mode = "dark"
+            appearance_mode = "dark" # Fallback
         ctk.set_appearance_mode(appearance_mode)
         ctk.set_default_color_theme("blue")
 
+        # --- Block 2: Setup UI Tabs and Load Settings into them ---
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
@@ -163,30 +166,32 @@ class KoboldLauncherGUI(ctk.CTk):
         self.tab_settings = self.tabview.add("Settings")
         self.tab_history = self.tabview.add("History")
 
-        self.tabview.set("Tune & Launch")
+        for tab_widget in [self.tab_main, self.tab_settings, self.tab_history]: # Renamed 'tab' to 'tab_widget' to avoid conflict
+            tab_widget.grid_columnconfigure(0, weight=1)
+            tab_widget.grid_rowconfigure(0, weight=1) # Usually row 0 or a specific content row
 
-        for tab in [self.tab_main, self.tab_settings, self.tab_history]:
-            tab.grid_columnconfigure(0, weight=1)
-            tab.grid_rowconfigure(0, weight=1)
+        self.setup_settings_tab() # Creates widgets in settings tab
+        self.load_settings_from_config() # Populates settings tab widgets using self.config
 
-        self.setup_settings_tab()
-        self.load_settings_from_config()
+        self.setup_main_tab()    # Creates widgets in main tab
+        self.setup_history_tab() # Creates widgets in history tab & loads initial history
 
-        self.setup_main_tab()
-        self.setup_history_tab()
+        self.tabview.set("Tune & Launch") # Set initial visible tab
 
+        # --- Block 3: Start Background Threads ---
         threading.Thread(target=self.monitor_vram, daemon=True).start()
 
+        # --- Block 4: Initial GUI Log Messages (General Status & Refined Library Status) ---
         self.log_to_console(f"TensorTune GUI Initialized. Core: {self.config.get('launcher_core_version', 'N/A')}")
         self.log_to_console(f"Config loaded: {core_init_results['config_message']}")
         if not core_init_results["db_success"]:
-            self.log_to_console(f"DB Warning: {core_init_results['db_message']}")
+            self.log_to_console(f"DB Warning: {core_init_results['db_message']}", level="WARNING")
         self.log_to_console(f"Using DB at: {self.db_path}")
-        self.log_to_console(f"Initial GPU Info: {self.gpu_info.get('message', 'N/A')}")
+        self.log_to_console(f"Initial GPU Info: {self.gpu_info.get('message', 'N/A')}") 
 
         kcpp_caps_info = self.koboldcpp_capabilities
         if "error" in kcpp_caps_info:
-            self.log_to_console(f"KCPP Caps Error: {kcpp_caps_info['error']}")
+            self.log_to_console(f"KCPP Caps Error: {kcpp_caps_info['error']}", level="ERROR")
         else:
             cuda_support = kcpp_caps_info.get('cuda', False)
             rocm_support = kcpp_caps_info.get('rocm', False)
@@ -194,31 +199,64 @@ class KoboldLauncherGUI(ctk.CTk):
             self.log_to_console(
                 f"KCPP Caps: CUDA:{cuda_support}, ROCm:{rocm_support}, FlashAttn:{flash_attn_support}"
             )
-            lib_errors_to_log = {
-            "PyNVML (NVIDIA)": tensortune_core.pynvml_load_error_reason,
-            "PyADLX (AMD)": tensortune_core.pyadlx_load_error_reason, # This will now be the detailed one
-            "WMI (Windows)": tensortune_core.wmi_load_error_reason,
-            "Psutil": tensortune_core.psutil_load_error_reason,
-            "PyZE (Intel)": tensortune_core.pyze_load_error_reason,
-            "Metal (Apple)": tensortune_core.metal_load_error_reason,
-            "Appdirs": tensortune_core.appdirs_load_error_reason,
-        }
-        for lib_name, error_reason in lib_errors_to_log.items():
-            if error_reason:
-                # Using the refined log_to_console if you implemented it
-                log_level_gui = "WARNING" # Default for optional libraries
-                # You can add more nuanced logic for log_level_gui if needed
-                # e.g., if "failed to load" and not just "not found", maybe "ERROR"
-                self.log_to_console(f"Library Status - {lib_name}: {error_reason}", level=log_level_gui)
+        
+        # Refined Library Status Logging
+        self.log_to_console("Checking status of optional support libraries...")
+        detected_gpu_type_str_gui = ""
+        if self.gpu_info and self.gpu_info.get("success"): # self.gpu_info is already set
+            detected_gpu_type_str_gui = self.gpu_info.get("type", "").lower()
 
-        self.check_koboldcpp_executable()
-        self._show_model_selection_view()
+        any_warnings_logged_gui = False
+        
+        if tensortune_core.appdirs_load_error_reason:
+            self.log_to_console(f"Library Status - Appdirs: {tensortune_core.appdirs_load_error_reason}", level="WARNING")
+            any_warnings_logged_gui = True
+        
+        if tensortune_core.psutil_load_error_reason:
+            self.log_to_console(f"Library Status - Psutil: {tensortune_core.psutil_load_error_reason} (Impacts auto-threads, process management)", level="ERROR")
+            any_warnings_logged_gui = True
+
+        if self.config.get("gpu_detection", {}).get("nvidia", True):
+            if tensortune_core.pynvml_load_error_reason:
+                self.log_to_console(f"Library Status - PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)", level="ERROR")
+                any_warnings_logged_gui = True
+        
+        if self.config.get("gpu_detection", {}).get("amd", True) and platform.system() == "win32":
+            if tensortune_core.pyadlx_load_error_reason:
+                if detected_gpu_type_str_gui == "amd" or not detected_gpu_type_str_gui or detected_gpu_type_str_gui == "unknown/none_auto":
+                    self.log_to_console(f"Library Status - PyADLX (AMD): {tensortune_core.pyadlx_load_error_reason}", level="WARNING")
+                    any_warnings_logged_gui = True
+            if tensortune_core.wmi_load_error_reason:
+                if detected_gpu_type_str_gui == "amd" or not detected_gpu_type_str_gui or detected_gpu_type_str_gui == "unknown/none_auto":
+                    self.log_to_console(f"Library Status - WMI (Windows Fallback for AMD/Other): {tensortune_core.wmi_load_error_reason}", level="WARNING")
+                    any_warnings_logged_gui = True
+        
+        if self.config.get("gpu_detection", {}).get("intel", True):
+            if tensortune_core.pyze_load_error_reason:
+                if "intel" in detected_gpu_type_str_gui or not detected_gpu_type_str_gui or detected_gpu_type_str_gui == "unknown/none_auto":
+                    self.log_to_console(f"Library Status - PyZE (Intel): {tensortune_core.pyze_load_error_reason}", level="WARNING")
+                    any_warnings_logged_gui = True
+
+        if self.config.get("gpu_detection", {}).get("apple", True) and platform.system() == "darwin":
+            if tensortune_core.metal_load_error_reason:
+                if "apple" in detected_gpu_type_str_gui or "metal" in detected_gpu_type_str_gui or not detected_gpu_type_str_gui or detected_gpu_type_str_gui == "unknown/none_auto":
+                    self.log_to_console(f"Library Status - Metal (Apple): {tensortune_core.metal_load_error_reason}", level="WARNING")
+                    any_warnings_logged_gui = True
+        
+        if not any_warnings_logged_gui: # Only print this if no specific warnings were logged above
+             self.log_to_console("All relevant optional and critical support libraries seem to be available or not applicable for your setup.", level="SUCCESS")
+        
+        # --- Block 5: Final UI Initialization Steps & Scheduled Calls ---
+        self.check_koboldcpp_executable() 
+        self._show_model_selection_view() # Ensures the correct initial view is displayed
+        
+        # These are scheduled to run after the main event loop starts, allowing the GUI to draw first
         self.after(100, self._run_first_time_setup_if_needed)
-        self.after(200, self._populate_gpu_id_dropdown_on_startup)
+        self.after(200, self._populate_gpu_id_dropdown_on_startup) # Depends on settings being loaded
 
-        self.update_save_button_state()
+        self.update_save_button_state() # Initial state of save button
 
-        # Register the close handler
+        # Register the window close handler
         self.protocol("WM_DELETE_WINDOW", self._on_gui_close_requested)
 
     def _on_gui_close_requested(self):
