@@ -248,6 +248,42 @@ GUI Example 3 (Settings Tab)
 GUI Example 4 (History Tab)
 ![alt text](https://raw.githubusercontent.com/Viceman256/TensorTune/main/screenshots/GUI4.png)
 
+## 🛣️ Roadmap & Future Enhancements
+
+We're always looking to improve TensorTune! Here are some of the features and enhancements we're considering for future releases:
+
+*   **🌟 Enhanced Model Support & Heuristics:**
+    *   Continuously refine model analysis (e.g., `num_layers`, MoE detection) for new and popular model architectures.
+    *   Improve the initial OT Level heuristics based on more model characteristics and VRAM availability.
+    *   Add specific tuning profiles or known-good starting points for very popular models.
+
+*   **📊 Advanced VRAM & Performance Logging:**
+    *   Provide more detailed VRAM usage breakdowns (if possible through underlying libraries).
+    *   Offer more comprehensive performance logging during tuning sessions (e.g., prompt processing speed, token generation speed).
+    *   Allow users to export tuning session logs/data.
+
+*   **🎛️ Finer-Grained Offloading Controls:**
+    *   Explore options for more granular control over tensor offloading beyond the current "OT Level" abstraction (e.g., per-layer type, specific tensor names for advanced users).
+    *   Investigate ways to more intelligently balance `--gpulayers` with `--overridetensors` for complex scenarios.
+
+*   **🚀 Multi-GPU Support (Exploratory):**
+    *   **Initial Phase:** Investigate how KoboldCpp handles multi-GPU setups (`--gpulayers` distribution, tensor splitting options like `--tensorsplit`).
+    *   **TensorTune Integration:** If KCPP offers sufficient CLI control, adapt TensorTune to:
+        *   Detect multiple GPUs of the same vendor.
+        *   Allow users to specify which GPUs to use.
+        *   Develop heuristics for distributing layers or tensors across multiple GPUs.
+        *   *Note: This is a complex feature and depends heavily on KoboldCpp's capabilities.*
+
+*   **🔗 Llama.cpp Backend Integration (Exploratory):**
+    *   **Monitoring:** Keep an eye on KoboldCpp's progress in potentially integrating `llama.cpp` (or forks like `ik_llama.cpp`) as a backend.
+    *   **Adaptation:** If KoboldCpp adopts a new backend that changes its command-line interface for offloading or performance tuning, TensorTune will need to adapt its argument generation and capability detection.
+    *   The goal would be to leverage any performance improvements from such backends while still providing TensorTune's smart offloading management.
+
+*   **⚙️ User Experience & Polish:**
+    *   Continue to refine the GUI and CLI for ease of use.
+    *   Add more in-app help and tooltips.
+    *   Improve error handling and user guidance for common issues.
+
 ## Latest Release: TensorTune v1.1.1
 
 This is a refinement release focusing on improved user guidance, smarter startup diagnostics, and bug fixes.
