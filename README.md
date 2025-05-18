@@ -252,37 +252,41 @@ GUI Example 4 (History Tab)
 
 We're always looking to improve TensorTune! Here are some of the features and enhancements we're considering for future releases:
 
-*   **🌟 Enhanced Model Support & Heuristics:**
-    *   Continuously refine model analysis (e.g., `num_layers`, MoE detection) for new and popular model architectures.
-    *   Improve the initial OT Level heuristics based on more model characteristics and VRAM availability.
+*   **🌟 Enhanced Model Support & Heuristics (for KoboldCpp & Llama.cpp):**
+    *   Continuously refine model analysis (e.g., `num_layers`, MoE detection) for new and popular model architectures, applicable to both backends.
+    *   Improve the initial OT Level heuristics (or equivalent logic for `llama.cpp`) based on model characteristics and VRAM availability.
     *   Add specific tuning profiles or known-good starting points for very popular models.
 
 *   **📊 Advanced VRAM & Performance Logging:**
-    *   Provide more detailed VRAM usage breakdowns (if possible through underlying libraries).
-    *   Offer more comprehensive performance logging during tuning sessions (e.g., prompt processing speed, token generation speed).
+    *   Provide more detailed VRAM usage breakdowns.
+    *   Offer more comprehensive performance logging during tuning sessions (e.g., prompt processing speed, token generation speed) for the active backend.
     *   Allow users to export tuning session logs/data.
 
 *   **🎛️ Finer-Grained Offloading Controls:**
-    *   Explore options for more granular control over tensor offloading beyond the current "OT Level" abstraction (e.g., per-layer type, specific tensor names for advanced users).
-    *   Investigate ways to more intelligently balance `--gpulayers` with `--overridetensors` for complex scenarios.
+    *   Explore options for more granular control over tensor offloading beyond the current "OT Level" abstraction for KoboldCpp.
+    *   Investigate similar granular controls if exposed by `llama.cpp`'s command-line interface.
 
-*   **🚀 Multi-GPU Support (Exploratory):**
-    *   **Initial Phase:** Investigate how KoboldCpp handles multi-GPU setups (`--gpulayers` distribution, tensor splitting options like `--tensorsplit`).
-    *   **TensorTune Integration:** If KCPP offers sufficient CLI control, adapt TensorTune to:
+*   **🚀 Multi-GPU Support (for KoboldCpp & Llama.cpp):**
+    *   **Investigation:** Research how both KoboldCpp and `llama.cpp` handle multi-GPU setups (e.g., layer distribution, tensor splitting like `--tensor-split` in `llama.cpp`).
+    *   **TensorTune Integration:**
         *   Detect multiple GPUs of the same vendor.
-        *   Allow users to specify which GPUs to use.
-        *   Develop heuristics for distributing layers or tensors across multiple GPUs.
-        *   *Note: This is a complex feature and depends heavily on KoboldCpp's capabilities.*
+        *   Allow users to specify which GPUs to use for the selected backend.
+        *   Develop heuristics for distributing layers or tensors across multiple GPUs, tailored to each backend's capabilities.
+        *   *Note: This is a complex feature and depends heavily on the CLI capabilities of both KoboldCpp and `llama.cpp`.*
 
-*   **🔗 Llama.cpp Backend Integration (Exploratory):**
-    *   **Monitoring:** Keep an eye on KoboldCpp's progress in potentially integrating `llama.cpp` (or forks like `ik_llama.cpp`) as a backend.
-    *   **Adaptation:** If KoboldCpp adopts a new backend that changes its command-line interface for offloading or performance tuning, TensorTune will need to adapt its argument generation and capability detection.
-    *   The goal would be to leverage any performance improvements from such backends while still providing TensorTune's smart offloading management.
+*   **🐑 Llama.cpp Support (as an Alternative Backend):**
+    *   **Backend Selection:** Allow users to choose between KoboldCpp and `llama.cpp` (or compatible forks like `ik_llama.cpp`) as the target application for TensorTune to manage.
+    *   **Capability Detection:** Implement logic to detect `llama.cpp`'s features and command-line arguments relevant to offloading (e.g., `--n-gpu-layers`, `--tensor-split`, quantization options).
+    *   **Argument Generation:** Adapt TensorTune's "OT Level" concept or develop new heuristics to generate optimal command-line arguments specifically for `llama.cpp`, focusing on its methods for GPU offloading and CPU tensor placement.
+    *   **Tuning & Monitoring:** Extend the auto-tuning and monitoring features to work with `llama.cpp`'s output and behavior.
+    *   **Separate Configuration:** Potentially manage separate default arguments and executable paths for `llama.cpp`.
 
 *   **⚙️ User Experience & Polish:**
-    *   Continue to refine the GUI and CLI for ease of use.
-    *   Add more in-app help and tooltips.
-    *   Improve error handling and user guidance for common issues.
+    *   Continue to refine the GUI and CLI for ease of use, accommodating the choice of backend.
+    *   Add more in-app help and tooltips, especially for backend-specific options.
+    *   Improve error handling and user guidance for common issues with both backends.
+
+We welcome community feedback and contributions to help shape the future of TensorTune!
 
 ## Latest Release: TensorTune v1.1.1
 
