@@ -1,3 +1,64 @@
+# TensorTune v1.2.0 - Changelog
+
+## Overview
+Version 1.2.0 is a significant update focusing on enhanced user control over GPU layer allocation, a comprehensive rewrite of core model analysis and offloading logic, and numerous improvements to stability and user experience in both the GUI and CLI.
+
+---
+
+## Core Improvements (`tensortune_core.py`)
+-   **Rewritten Model Analysis (`analyze_filename`):**
+    -   Significantly improved model family recognition (Gemma, Llama, Mistral, Mixtral, Qwen, Phi, Dark Champion, etc.) for more accurate default layer counts.
+    -   Enhanced heuristics for determining `num_layers` based on model size (e.g., 7B, 30B, 70B) and MoE characteristics.
+    -   Added specific handling for MoE models like Dark Champion to ensure appropriate layer counts (e.g., 48 layers for 21B+ MoE).
+    -   Improved fallback mechanisms for layer count determination when not explicitly found in the filename.
+    -   Refined VRAM estimation logic.
+-   **Rebuilt GPU Layer Allocation Logic (`get_gpu_layers_for_level`):**
+    *   Completely redesigned to provide smoother and more granular transitions between CPU-biased and GPU-biased offload levels.
+    *   Eliminated the "big jump" issue where layer counts would abruptly go from a low number to 999 (all layers).
+    *   Implemented percentage-based scaling that respects the actual total layer count of different model architectures, providing more intuitive steps.
+    *   Tailored allocation strategies for both MoE and Dense models, with different sensitivity curves for OT levels.
+    *   Ensures a minimum of 1 layer is always assigned if GPU offload is active.
+-   **More Informative Offload Descriptions (`get_offload_description`):**
+    *   Updated to provide clearer, more qualitative insights into the current tensor offloading strategy based on the OT Level.
+    *   Improved display of effective GPU layer counts versus total model layers.
+-   **Historical Configuration Handling:**
+    *   Improved logic in `find_best_historical_config` to better prioritize user-marked "preferred" configurations and successful runs that fit current VRAM.
+    *   More robust parsing of historical arguments.
+-   **Argument Building (`build_command`):**
+    *   Now correctly incorporates manual GPU layer overrides, ensuring they take precedence over OT-level-derived layer counts.
+    *   Refined logic for handling `auto`, `off`, and numeric values for `--gpulayers` in conjunction with `--nogpulayers`.
+
+---
+
+## GUI Improvements (`tensortune_gui.py`)
+-   **New Feature: Manual GPU Layer Control:**
+    *   Added an "Auto GPU Layers" checkbox in the tuning session view.
+    *   When unchecked, users can enter a specific number of GPU layers in an accompanying entry field. This manual value will be used for the launch command, overriding the OT level's automatic calculation.
+-   **Tuning Session Enhancements:**
+    *   Manual GPU layer settings are now correctly applied and reflected in the "Proposed Command" display.
+    *   Fixed an issue where "Set as Preferred" configurations might not be correctly prioritized when restarting a tuning session for the same model.
+    *   The "Last Monitored Result" display in the tuning view is now more reliably updated from historical data.
+    *   Improved UI state management for tuning buttons, especially after monitoring or changing settings.
+-   **Stability & UX:**
+    *   Fixed `TclError` that could occur when closing various dialogs (e.g., model-specific args, first-time setup) by improving focus management and widget destruction sequences.
+    *   Refined handling of model-specific configuration dialogs, ensuring changes are correctly applied and UI is updated.
+    *   Corrected an issue in `_handle_post_monitor_action` where `self.kcpp_process_obj` might be used after being set to `None`.
+
+---
+
+## CLI Improvements (`tensortune_cli.py`)
+-   **Manual GPU Layer Control:**
+    *   The CLI now implicitly supports manual GPU layer overrides if a user edits the `--gpulayers` value directly in the "Edit Session Args" or "Permanent Model Args" sections. The `build_command` function will respect this.
+-   **Monitoring & Progress:**
+    *   Fixed issues with Rich library progress bar display during live KCPP monitoring, ensuring it completes or hides correctly.
+    *   The progress bar now shows "KCPP API Ready!" and auto-completes upon successful detection.
+    *   Added a small delay after successful API detection to allow users to see the completed progress bar before further actions.
+    *   Improved the reliability of the KCPP output monitoring thread and its interaction with user stop requests.
+-   **Tuning Logic:**
+    *   Ensured "preferred" historical configurations are better respected when initializing a new tuning session.
+    *   Corrected logic for determining starting OT level based on historical data and current VRAM.
+
+
 # TensorTune v1.1.1 - Changelog
 
 ### Added

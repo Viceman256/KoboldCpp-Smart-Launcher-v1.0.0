@@ -288,19 +288,36 @@ We're always looking to improve TensorTune! Here are some of the features and en
 
 We welcome community feedback and contributions to help shape the future of TensorTune!
 
-## Latest Release: TensorTune v1.1.1
+## Latest Release: TensorTune v1.2.0 - Manual GPU Layers & Core Logic Rewrite!
 
-This is a refinement release focusing on improved user guidance, smarter startup diagnostics, and bug fixes.
+TensorTune v1.2.0 is a major update focusing on giving users more precise control over GPU layer allocation, significantly improving the core logic for model analysis and tensor offloading strategies, and squashing numerous bugs for a smoother experience.
 
-**Key changes in v1.1.1:**
+**Key Changes in v1.2.0:**
 
--   **Context-Aware Library Warnings (CLI & GUI):** Startup logs now provide more relevant status for optional GPU monitoring libraries (PyADLX, PyZE, WMI, Metal), reducing unnecessary noise based on detected hardware.
--   **CLI Warning Suppression:** Added an option in CLI settings to suppress non-critical optional library warnings after the first run.
--   **Detailed Setup Guides:** Includes `PYADLX_SETUP_GUIDE.md`, `PYZE_SETUP_GUIDE.md`, and `WMI_SETUP_GUIDE.md` for users wishing to set up these advanced/optional monitoring libraries. Error messages now point to these guides.
--   **Bug Fix (CLI):** Resolved a `SyntaxError` related to global variable scope when launching models directly or via "best remembered" config in the CLI. VRAM decision data is now passed more robustly as parameters.
--   **GUI Initialization:** Refined GUI startup sequence for better stability and correct data availability for initial logging.
--   **Documentation & Install Script:** Updated `README.md`, `requirements.txt` (and its generation), `tensortune_install.py`, and `tensortune_examples.py` to reflect version 1.1.1 and new features/guides. Added `appdirs` to default requirements.
--   Consistent versioning across all application components.
+*   **Manual GPU Layer Control (GUI & CLI):**
+    *   Users can now manually specify the exact number of GPU layers to use during tuning sessions. This custom setting will override the automatic calculation derived from the OT (OverrideTensors) Level.
+    *   An "Auto GPU Layers" checkbox (GUI) or option (CLI, implicitly) allows reverting to TensorTune's dynamic calculation.
+*   **Rewritten Core Offloading Logic:**
+    *   **Model Analysis (`analyze_filename`):** Completely redesigned for more accurate model family recognition (e.g., Gemma, Llama, Mixtral, Qwen, Dark Champion), better layer count detection, and improved handling of MoE models. Includes fallback mechanisms for models with unclear layer information.
+    *   **GPU Layer Allocation (`get_gpu_layers_for_level`):** Entirely rebuilt to provide smoother, more predictable transitions between CPU/GPU bias levels. Eliminates sudden jumps in layer counts (e.g., from few to 999) and uses percentage-based scaling respectful of actual model architecture.
+    *   **Offload Descriptions (`get_offload_description`):** Updated to provide clearer insights into the current tensor offloading strategy, including more accurate GPU layer counts and qualitative descriptions.
+*   **Improved Tuning Experience:**
+    *   **Historical Preference:** Configurations marked as "preferred" are now more reliably used when starting new tuning sessions for the same model.
+    *   **Consistent Levels:** Fixed issues where tuning might not start at the exact level from a previous successful or preferred run.
+    *   **Last Run Info:** Tuning sessions now better display information from the last relevant historical run.
+*   **CLI Enhancements:**
+    *   Resolved issues with Rich library progress bar display during KCPP monitoring.
+    *   Progress bar now automatically completes upon successful API detection, with a brief pause for visibility.
+    *   Multiple bug fixes in the KCPP monitoring code for stability.
+*   **GUI Stability & UX:**
+    *   Fixed `TclError` that could occur when closing dialogs.
+    *   Improved handling and display of model-specific configurations.
+*   **General Bug Fixes & Refinements:**
+    *   Corrected handling of model-specific arguments and global settings interactions.
+    *   Enhanced parameter estimation for large and MoE models.
+    *   More robust selection of historical configurations.
+
+This update aims to provide a more powerful, intuitive, and reliable experience for optimizing your KoboldCpp launches.
 
 For a full list of changes, see the `CHANGELOG.md`.
 
