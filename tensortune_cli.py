@@ -77,10 +77,31 @@ else: # Fallback for no Rich
         if default is not None: prompt_text += f" [{default}]"
         prompt_text += ": "
         while True:
-            response = input(prompt_text).strip()
-            if not response and default is not None: return default
-            if not choices or response in choices: return response
-            print_error(f"Invalid choice. Please choose from: {', '.join(choices)}")
+            try:
+                response = input(prompt_text)
+                # Only strip if we actually got a string
+                if response is not None:
+                    response = response.strip()
+                # Return default for empty responses if default is provided
+                if (response is None or response == '') and default is not None: 
+                    return default
+                # For choices, ensure valid selection or repeat prompt
+                if choices:
+                    if response in choices:
+                        return response
+                    else:
+                        print_error(f"Invalid choice. Please choose from: {', '.join(choices)}")
+                else:
+                    # If no choices specified, return whatever was entered (could be empty string)
+                    return response
+            except (KeyboardInterrupt, EOFError):
+                # Handle Ctrl+C and other terminal interruptions
+                print("\nInput interrupted.")
+                return default if default is not None else ""
+            except Exception as e:
+                # For any other errors, log and return default or empty
+                print_error(f"Input error: {e}")
+                return default if default is not None else ""
     def confirm(text, default=True):
         prompt_suffix = " [Y/n]" if default else " [y/N]"
         while True:
@@ -89,6 +110,8 @@ else: # Fallback for no Rich
             if response in ['y', 'yes']: return True
             if response in ['n', 'no']: return False
             print_error("Invalid input. Please answer 'yes' or 'no'.")
+           
+
 
 # --- Global Configuration Variables (populated from tensortune_core) ---
 CONFIG: Dict[str, Any] = {}
@@ -148,6 +171,32 @@ def _update_cli_globals_from_config():
     OOM_ERROR_KEYWORDS = [k.lower() for k in CONFIG.get("oom_error_keywords", [])]
     last_gguf_directory = CONFIG.get("last_used_gguf_dir", "")
 
+def refine_model_analysis_cli(model_analysis_dict):
+    """Called after a model is analyzed to handle special cases"""
+    if not model_analysis_dict:
+        return model_analysis_dict
+
+    # Special handling for MoE models to ensure they get enough layers
+    if model_analysis_dict.get('is_moe', False):
+        # Get current layer count
+        num_layers = model_analysis_dict.get('num_layers', 32)
+        
+        # For large 21B+ MoE models like Dark Champion, ensure we have reasonable layer count
+        model_name = os.path.basename(model_analysis_dict.get('filepath', "")).lower()
+        if ('dark-champion' in model_name or 'inst-21b' in model_name) and num_layers < 32:
+            # Override with a more reasonable layer count for this model family
+            model_analysis_dict['num_layers'] = 48
+            print_info(f"Applied MoE-specific enhancement: Layer count adjusted to 48 for {model_name}")
+            
+        # Check for very low layer counts that don't make sense
+        if num_layers < 10 and model_analysis_dict.get('size_b', 0) > 10:
+            # This is likely incorrect - apply a correction based on model size
+            size_b = model_analysis_dict.get('size_b', 0)
+            corrected_layers = 48 if size_b > 20 else 32
+            model_analysis_dict['num_layers'] = corrected_layers
+            print_info(f"Corrected suspicious layer count: Adjusted from {num_layers} to {corrected_layers} based on model size")
+    
+    return model_analysis_dict
 
 def _validate_and_update_kcpp_exe_path_in_config(config_dict: Dict[str, Any], input_path: str) -> bool:
     """Validates input_path and updates config_dict if valid and different. Returns True if path is valid."""
@@ -295,13 +344,13 @@ def select_gguf_file_cli() -> Optional[str]:
 
     print_title("Select GGUF Model / Main Menu")
 
-    main_menu_actions = { "s": "Select GGUF Model File", "t": "Launcher Settings", "h": "View Global Launch History", "q": "Quit Launcher" }
+    main_menu_actions = { "s": "Select GGUF Model File", "l": "Launcher Settings", "h": "View Global Launch History", "q": "Quit Launcher" }
     print("Main Menu Options:"); [print(f"  ({k.upper()}) {d}") for k, d in main_menu_actions.items()]
 
     while True:
         action_choice = prompt("Your choice", choices=list(main_menu_actions.keys()), default="s").lower()
         if action_choice == 'q': return None
-        if action_choice == 't':
+        if action_choice == 'l':
             manage_launcher_settings_cli()
             _update_cli_globals_from_config() 
             print_title("Select GGUF Model / Main Menu"); [print(f"  ({k.upper()}) {d}") for k, d in main_menu_actions.items()]
@@ -351,15 +400,22 @@ def select_gguf_file_cli() -> Optional[str]:
     
     dir_for_manual_prompt = last_gguf_directory or DEFAULT_GGUF_DIR or os.getcwd()
     while True:
-        filepath_manual_input = prompt(
+        raw_filepath_input = prompt(
             f"Enter full path to GGUF model file (or press Enter to cancel and return to main menu)\n"
             f"(Searches in: '{dir_for_manual_prompt}' if relative path is given)"
-        ).strip()
-
+        )
+        
+        # Handle None or empty input explicitly
+        if raw_filepath_input is None or raw_filepath_input == '':
+            print_info("File selection cancelled via manual input.")
+            return "main_menu"
+            
+        # Now we know it's safe to strip
+        filepath_manual_input = raw_filepath_input.strip()
+        
         if not filepath_manual_input:
             print_info("File selection cancelled via manual input.")
             return "main_menu"
-
         potential_full_path = os.path.join(dir_for_manual_prompt, filepath_manual_input) \
             if not os.path.isabs(filepath_manual_input) else filepath_manual_input
         
@@ -969,12 +1025,14 @@ def edit_current_args_interactive_cli(model_path_for_specifics: Optional[str],
             print_error("Invalid choice.")
 
 
-def _log_to_cli_live_output(text_line: str, console_obj_for_rich: Optional[Console] = None):
+def _log_to_cli_live_output(text_line: str, console_obj_for_rich: Optional[Console] = None, inside_progress: bool = False):
     if console_obj_for_rich and dependencies['rich']['module']:
-        # When using Rich Progress, printing directly to console can mess with the bar.
-        # It's better if the Progress bar itself includes any dynamic text via its columns.
-        # For general KCPP output, printing it interleaved might be acceptable if console handles it.
-        console_obj_for_rich.print(text_line.rstrip(),markup=False,highlight=False, overflow="ignore") # ignore overflow to prevent wrapping issues with progress bar
+        if inside_progress:
+            # Just collect output when inside progress, don't print to console
+            kcpp_output_lines_shared.append(text_line.rstrip())
+        else:
+            # Print normally when not inside progress
+            console_obj_for_rich.print(text_line.rstrip(), markup=False, highlight=False, overflow="ignore")
     else:
         sys.stdout.write(text_line)
         sys.stdout.flush()
@@ -988,7 +1046,8 @@ def monitor_kcpp_output_thread_target_cli(
     success_regex_str_config: str,
     oom_keywords_list_config: List[str],
     target_port_for_success_check: str,
-    console_obj_for_rich: Optional[Console] = None # Pass console for Rich printing
+    console_obj_for_rich: Optional[Console] = None, # Pass console for Rich printing
+    inside_progress: bool = False # Flag to indicate we're inside a progress bar
 ):
     global user_requested_stop_monitoring_cli
     try:
@@ -997,7 +1056,8 @@ def monitor_kcpp_output_thread_target_cli(
             try: line_decoded_from_kcpp = line_bytes_from_kcpp.decode('utf-8', errors='replace')
             except UnicodeDecodeError: line_decoded_from_kcpp = line_bytes_from_kcpp.decode('latin-1', errors='replace')
             
-            _log_to_cli_live_output(line_decoded_from_kcpp, console_obj_for_rich)
+            if not dependencies['rich']['module'] or not console_obj_for_rich:
+                _log_to_cli_live_output(line_decoded_from_kcpp, None)
             
             line_strip_lower_case = line_decoded_from_kcpp.strip().lower()
             if line_strip_lower_case:
@@ -1076,11 +1136,17 @@ def launch_and_monitor_for_tuning_cli():
     target_port_str_for_success = effective_args_for_port_check.get("--port", "5000")
     
     final_outcome_key_from_monitor = "UNKNOWN_EXIT_CLI" 
-    monitor_thread_args = ( kcpp_process_obj, kcpp_success_event, kcpp_oom_event, kcpp_output_lines_shared, KOBOLD_SUCCESS_PATTERN, OOM_ERROR_KEYWORDS, target_port_str_for_success, console if dependencies['rich']['module'] else None)
+    monitor_thread_args = ( kcpp_process_obj, kcpp_success_event, kcpp_oom_event, kcpp_output_lines_shared, KOBOLD_SUCCESS_PATTERN, OOM_ERROR_KEYWORDS, target_port_str_for_success, console if dependencies['rich']['module'] else None, True if dependencies['rich']['module'] else False)
 
     # --- Monitoring loop (Rich or plain) as before ---
     if dependencies['rich']['module']:
-        with Progress(...) as progress_live_display: # Your existing Rich progress
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn()
+        ) as progress_live_display: # Your existing Rich progress
             # ... (existing Rich monitoring loop) ...
             # Ensure it sets final_outcome_key_from_monitor
             loading_task_id = progress_live_display.add_task("KCPP Loading...", total=float(LOADING_TIMEOUT_SECONDS))
@@ -1090,15 +1156,53 @@ def launch_and_monitor_for_tuning_cli():
             try:
                 while True:
                     elapsed_monitor_time = time.monotonic() - monitor_start_time
-                    if not progress_live_display.finished: progress_live_display.update(loading_task_id, completed=min(elapsed_monitor_time, float(LOADING_TIMEOUT_SECONDS)))
-                    if user_requested_stop_monitoring_cli: final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; break
                     process_has_exited = kcpp_process_obj.poll() is not None
-                    if kcpp_success_event.is_set(): final_outcome_key_from_monitor = "SUCCESS_LOAD_DETECTED_CLI"; break
-                    if kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "OOM_CRASH_DETECTED_CLI"; break
-                    if process_has_exited and not kcpp_success_event.is_set() and not kcpp_oom_event.is_set(): final_outcome_key_from_monitor = "PREMATURE_EXIT_CLI"; break
-                    if elapsed_monitor_time > float(LOADING_TIMEOUT_SECONDS): final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"; break
+                    
+                    # Check for success first, to update progress bar before breaking
+                    if kcpp_success_event.is_set():
+                        # Set progress to 100% when API detected
+                        if not progress_live_display.finished:
+                            progress_live_display.update(loading_task_id, completed=float(LOADING_TIMEOUT_SECONDS))
+                            progress_live_display.update(loading_task_id, description="KCPP API Ready!")
+                        final_outcome_key_from_monitor = "SUCCESS_LOAD_DETECTED_CLI"
+                        break
+                        
+                    # Update progress bar normally for non-success cases
+                    if not progress_live_display.finished:
+                        progress_live_display.update(loading_task_id, completed=min(elapsed_monitor_time, float(LOADING_TIMEOUT_SECONDS)))
+                    
+                    if user_requested_stop_monitoring_cli:
+                        final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"
+                        break
+                    
+                    if kcpp_oom_event.is_set():
+                        final_outcome_key_from_monitor = "OOM_CRASH_DETECTED_CLI"
+                        break
+                        
+                    if process_has_exited and not kcpp_success_event.is_set() and not kcpp_oom_event.is_set():
+                        final_outcome_key_from_monitor = "PREMATURE_EXIT_CLI"
+                        break
+                        
+                    if elapsed_monitor_time > float(LOADING_TIMEOUT_SECONDS):
+                        final_outcome_key_from_monitor = "TIMEOUT_NO_SIGNAL_CLI"
+                        break
+                        
                     time.sleep(0.25)
             except KeyboardInterrupt: user_requested_stop_monitoring_cli = True; final_outcome_key_from_monitor = "USER_STOPPED_MONITORING_CLI"; print_warning("\nMonitoring interrupted by user."); raise # Re-raise to be caught by main try-except
+            
+            # For successful loads, pause briefly to show the completed progress bar
+            if final_outcome_key_from_monitor == "SUCCESS_LOAD_DETECTED_CLI":
+                time.sleep(1)  # Small pause to show the completed progress
+            # Print the collected output after the progress bar is done
+            if dependencies['rich']['module'] and kcpp_output_lines_shared:
+                for line in kcpp_output_lines_shared[-20:]:  # Show only the last 20 lines to avoid overwhelming
+                    console.print(line, markup=False, highlight=False)
+        
+        # After the progress bar is done, show the collected output if desired
+        if console and kcpp_output_lines_shared and confirm("Show detailed KCPP output log?", default=False):
+            with console.pager():
+                for line in kcpp_output_lines_shared:
+                    console.print(line, markup=False, highlight=False)
     else: # No Rich
         # ... (existing plain monitoring loop) ...
         # Ensure it sets final_outcome_key_from_monitor
@@ -1203,11 +1307,23 @@ def handle_post_monitoring_choices_cli(
     # --- Logic for choices_dict and default_choice_key as before ---
     if "SUCCESS_LOAD_VRAM_OK" in outcome_from_monitor:
         print_success("KCPP loaded successfully (Budgeted VRAM OK).")
-        choices_dict = { "u": "✅ Accept & Use this KCPP instance", "s": "💾 Save as Good, Auto-Adjust for More GPU & Continue Tuning", "g": "⚙️ Manually Try More GPU (This Session) & Continue Tuning", "c": "⚙️ Manually Try More CPU (This Session) & Continue Tuning", "q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)" }
+        choices_dict = { 
+            "u": "✅ Accept & Use this KCPP instance", 
+            "p": "⭐ Set as Preferred & Continue Tuning", 
+            "s": "💾 Save as Good, Auto-Adjust for More GPU & Continue Tuning", 
+            "g": "⚙️ Manually Try More GPU (This Session) & Continue Tuning", 
+            "c": "⚙️ Manually Try More CPU (This Session) & Continue Tuning", 
+            "q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)" 
+        }
         default_choice_key = "u" if kcpp_is_still_running else "s"
     elif "SUCCESS_LOAD_VRAM_TIGHT" in outcome_from_monitor:
         print_warning("KCPP loaded, but Budgeted VRAM is tight!")
-        choices_dict = { "a": "⚠️ Auto-Adjust for More CPU & Continue Tuning", "l": "🚀 Launch This Config Anyway (Risky)", "q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)" }
+        choices_dict = { 
+            "a": "⚠️ Auto-Adjust for More CPU & Continue Tuning", 
+            "p": "⭐ Set as Preferred (Tight) & Continue Tuning",
+            "l": "🚀 Launch This Config Anyway (Risky)", 
+            "q": "↩️ Save Outcome & Return to Tuning Menu (Manual Adjust)" 
+        }
         default_choice_key = "a"
     elif "OOM" in outcome_from_monitor or "CRASH" in outcome_from_monitor or "PREMATURE_EXIT" in outcome_from_monitor or "USER_STOPPED" in outcome_from_monitor:
         print_error("KCPP failed to load properly (OOM/Crash/Premature Exit/User Stop).")
@@ -1245,6 +1361,7 @@ def handle_post_monitoring_choices_cli(
     # Determine the suffix for the DB outcome based on user's choice
     if user_action_choice == 'u': db_outcome_suffix_for_action = "_USER_ACCEPTED_TUNED_CLI"
     elif user_action_choice == 'l': db_outcome_suffix_for_action = "_USER_LAUNCHED_RISKY_CLI"
+    elif user_action_choice == 'p': db_outcome_suffix_for_action = "_USER_MARKED_AS_BEST_CLI"
     elif user_action_choice == 's': db_outcome_suffix_for_action = "_USER_SAVED_GOOD_GPU_CLI"
     elif user_action_choice == 'g': db_outcome_suffix_for_action = "_USER_WANTS_MORE_GPU_CLI"
     elif user_action_choice == 'a': db_outcome_suffix_for_action = "_USER_AUTO_ADJUST_CPU_CLI"
@@ -1478,7 +1595,11 @@ def run_model_tuning_session_cli() -> str:
     tuning_in_progress = True
     current_tuning_model_path_local = gguf_file_global
     current_tuning_model_analysis_local = current_model_analysis_global.copy()
+    current_tuning_model_analysis_local = refine_model_analysis_cli(current_tuning_model_analysis_local)
     current_tuning_session_base_args = get_effective_session_args(current_tuning_model_path_local, {}) 
+    current_tuning_model_analysis_local = current_model_analysis_global.copy()
+    # Apply refinement here as well to ensure consistency during tuning
+    current_tuning_model_analysis_local = refine_model_analysis_cli(current_tuning_model_analysis_local)
     last_successful_monitored_run_details_cli = None
     vram_at_decision_for_db = None 
     last_approx_vram_used_kcpp_mb = None 
@@ -1521,14 +1642,32 @@ def run_model_tuning_session_cli() -> str:
 
     if best_historical_config and "attempt_level" in best_historical_config:
         print_info(f"Found historical config. Level: {best_historical_config['attempt_level']}, Outcome: {best_historical_config['outcome']}")
+            # Update last_successful_monitored_run_details_cli from history
+    if best_historical_config and best_historical_config.get("outcome", "").startswith("SUCCESS"):
+        last_successful_monitored_run_details_cli = {
+            "level": best_historical_config['attempt_level'],
+            "outcome": best_historical_config['outcome'],
+            "vram_used_mb": f"{best_historical_config.get('approx_vram_used_kcpp_mb', 'N/A')}" 
+        }
+        print_success(f"Last Session Result (from history): Level {best_historical_config['attempt_level']}, "
+                     f"Outcome: {best_historical_config['outcome']}, "
+                     f"VRAM Used: {best_historical_config.get('approx_vram_used_kcpp_mb', 'N/A')}MB")
         hist_lvl, hist_outcome_str = best_historical_config['attempt_level'], best_historical_config.get('outcome', "")
         approx_hist_vram_used = best_historical_config.get('approx_vram_used_kcpp_mb') 
 
-        if approx_hist_vram_used is not None and (float(approx_hist_vram_used) + VRAM_SAFETY_BUFFER_MB < current_actual_hw_free_vram_mb):
-            initial_heuristic_level = max(current_tuning_min_level, hist_lvl -1 if hist_lvl > current_tuning_min_level else hist_lvl)
+        # Handle starting level based on historical outcome and current VRAM - prioritize exact match for preferred configs
+        if hist_outcome_str.endswith("_USER_MARKED_AS_BEST_CLI") or hist_outcome_str.endswith("_USER_MARKED_AS_BEST_GUI"):
+            # For preferred configurations, use exactly the same level
+            initial_heuristic_level = hist_lvl
+            print_info(f"Using exact level {hist_lvl} from preferred historical configuration")
+        elif approx_hist_vram_used is not None and (float(approx_hist_vram_used) + VRAM_SAFETY_BUFFER_MB < current_actual_hw_free_vram_mb):
+            # For other successful configs with room to spare, allow slight GPU adjustment
+            initial_heuristic_level = max(current_tuning_min_level, hist_lvl - 1 if hist_lvl > current_tuning_min_level else hist_lvl)
             print_info(f"Historical success used {approx_hist_vram_used:.0f}MB (actual) fits current actual VRAM ({current_actual_hw_free_vram_mb:.0f}MB). Starting near: {initial_heuristic_level}")
         elif hist_outcome_str.startswith("SUCCESS_LOAD_VRAM_OK") or hist_outcome_str.startswith("SUCCESS_USER_CONFIRMED") or hist_outcome_str.endswith("_USER_SAVED_GOOD_GPU_CLI"):
-            initial_heuristic_level = max(current_tuning_min_level, hist_lvl - 1 if hist_lvl > current_tuning_min_level else hist_lvl)
+            # For other successful configs, also use the exact level to be safe
+            initial_heuristic_level = hist_lvl
+            print_info(f"Using exact historical level {hist_lvl} for successful configuration")
         elif hist_outcome_str.endswith("_USER_AUTO_ADJUST_CPU_CLI") or hist_outcome_str.endswith("_USER_TRIED_CPU_AFTER_FAIL_CLI") or "OOM" in hist_outcome_str.upper() or "TIGHT" in hist_outcome_str.upper():
              initial_heuristic_level = min(current_tuning_max_level, hist_lvl + 1 if hist_lvl < current_tuning_max_level else hist_lvl)
         else: initial_heuristic_level = hist_lvl
@@ -1573,9 +1712,29 @@ def run_model_tuning_session_cli() -> str:
             print_info(f"Model: {os.path.basename(current_tuning_model_path_local)}")
             print(f"🛠️ OT Level: {current_tuning_attempt_level}\n   Range: {current_tuning_min_level}=MaxGPU to {current_tuning_max_level}={'SuperMaxCPU' if current_tuning_model_analysis_local.get('is_moe') else 'MaxCPU'}\n   Strategy: {strategy_description}\n   Regex: {(ot_string_generated or 'None')}\n   GPU Layers: {gpu_layers_for_level}/{total_model_layers}")
 
-        args_for_kcpp_display_list = tensortune_core.build_command(current_tuning_model_path_local, ot_string_generated, current_tuning_model_analysis_local, current_tuning_session_base_args, current_attempt_level_for_tuning=current_tuning_attempt_level)
+        # Preserve custom GPU layers setting if manually edited
+        custom_gpulayers_value = None
+        if "--gpulayers" in current_tuning_session_base_args:
+            base_gpulayers_str = str(current_tuning_session_base_args.get("--gpulayers", "auto")).lower()
+            if base_gpulayers_str not in ["auto", "0", "off"]:  # If it's a custom numeric value
+                # Try to parse it and see if it's likely a user-specified value
+                try:
+                    custom_gpulayers_value = int(base_gpulayers_str)
+                except ValueError:
+                    # Handle case where it's not a valid integer (special strings, etc.)
+                    custom_gpulayers_value = base_gpulayers_str
+
+        # Generate the command arguments with OT settings
+        args_for_kcpp_display_list = tensortune_core.build_command(
+            current_tuning_model_path_local, 
+            ot_string_generated, 
+            current_tuning_model_analysis_local, 
+            current_tuning_session_base_args, 
+            current_attempt_level_for_tuning=current_tuning_attempt_level,
+            manual_gpu_layers_override=custom_gpulayers_value  # Pass the custom value if set
+        )
         display_full_command_list = tensortune_core.get_command_to_run(KOBOLDCPP_EXECUTABLE, args_for_kcpp_display_list)
-        
+                
         _, _, vram_info_message_str, current_gpu_rich_info_tuning = tensortune_core.get_available_vram_mb(CONFIG)
         if dependencies['rich']['module']: console.print(Panel(f"{vram_info_message_str}", title="Current GPU Info", style="green" if current_gpu_rich_info_tuning.get("success") else "red", expand=False))
         else: print(f"    GPU Status: {vram_info_message_str}")
@@ -1698,44 +1857,40 @@ def main_cli():
     any_vendor_specific_warnings_printed = False
 
     # NVIDIA
-    if CONFIG.get("gpu_detection", {}).get("nvidia", True): # If NVIDIA detection is enabled
-        if tensortune_core.pynvml_load_error_reason:
-            print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
-            critical_issues_found_overall = True
-            any_vendor_specific_warnings_printed = True
-        elif show_optional_lib_warnings and detected_gpu_type_str == "nvidia":
-            # This 'else' could be a "PyNVML OK for your NVIDIA GPU" if no error, but might be too verbose.
-            pass 
+    if detected_gpu_type_str == "nvidia" or detected_gpu_type_str == "": # Only show for NVIDIA GPU or unknown GPU
+        if CONFIG.get("gpu_detection", {}).get("nvidia", True): # If NVIDIA detection is enabled
+            if tensortune_core.pynvml_load_error_reason:
+                print_error(f"  CRITICAL! PyNVML (NVIDIA): {tensortune_core.pynvml_load_error_reason} (Required for NVIDIA VRAM monitoring)")
+                critical_issues_found_overall = True
+                any_vendor_specific_warnings_printed = True
 
     # AMD
-    if CONFIG.get("gpu_detection", {}).get("amd", True) and platform.system() == "win32":
-        if tensortune_core.pyadlx_load_error_reason:
-            if show_optional_lib_warnings or detected_gpu_type_str == "amd": # Show if AMD detected or if warnings are generally on
-                print_warning(f"  ! PyADLX (AMD): {tensortune_core.pyadlx_load_error_reason}")
-                any_vendor_specific_warnings_printed = True
-        if tensortune_core.wmi_load_error_reason: # WMI is a fallback for AMD on Windows
-             if show_optional_lib_warnings or detected_gpu_type_str == "amd" or not detected_gpu_type_str: # Show if AMD, no GPU, or warnings on
-                print_warning(f"  ! WMI (Windows Fallback for AMD/Other): {tensortune_core.wmi_load_error_reason}")
-                any_vendor_specific_warnings_printed = True
-    elif CONFIG.get("gpu_detection", {}).get("amd", True) and platform.system() != "win32":
-        # For AMD on Linux/macOS, rocm-smi is used by core but doesn't have a direct import check here.
-        # The gpu_info_data_rich.message would reflect rocm-smi issues.
-        pass
+    if detected_gpu_type_str == "amd" or detected_gpu_type_str == "": # Only show for AMD GPU or unknown GPU
+        if CONFIG.get("gpu_detection", {}).get("amd", True) and platform.system() == "win32":
+            if tensortune_core.pyadlx_load_error_reason:
+                if show_optional_lib_warnings:
+                    print_warning(f"  ! PyADLX (AMD): {tensortune_core.pyadlx_load_error_reason}")
+                    any_vendor_specific_warnings_printed = True
+            if tensortune_core.wmi_load_error_reason: # WMI is a fallback for AMD on Windows
+                 if show_optional_lib_warnings:
+                    print_warning(f"  ! WMI (Windows Fallback for AMD/Other): {tensortune_core.wmi_load_error_reason}")
+                    any_vendor_specific_warnings_printed = True
 
     # Intel
-    if CONFIG.get("gpu_detection", {}).get("intel", True):
-        if tensortune_core.pyze_load_error_reason:
-            if show_optional_lib_warnings or "intel" in detected_gpu_type_str: # Show if Intel detected or if warnings are on
-                print_warning(f"  ! PyZE (Intel): {tensortune_core.pyze_load_error_reason}")
-                any_vendor_specific_warnings_printed = True
+    if detected_gpu_type_str == "intel" or detected_gpu_type_str == "": # Only show for Intel GPU or unknown GPU
+        if CONFIG.get("gpu_detection", {}).get("intel", True):
+            if tensortune_core.pyze_load_error_reason:
+                if show_optional_lib_warnings:
+                    print_warning(f"  ! PyZE (Intel): {tensortune_core.pyze_load_error_reason}")
+                    any_vendor_specific_warnings_printed = True
 
     # Apple
-    if CONFIG.get("gpu_detection", {}).get("apple", True) and platform.system() == "darwin":
-        if tensortune_core.metal_load_error_reason:
-            if show_optional_lib_warnings or "apple" in detected_gpu_type_str or "metal" in detected_gpu_type_str: # Show if Apple detected or if warnings on
-                print_warning(f"  ! Metal (Apple): {tensortune_core.metal_load_error_reason}")
-                any_vendor_specific_warnings_printed = True
-
+    if detected_gpu_type_str == "apple" or "metal" in detected_gpu_type_str or detected_gpu_type_str == "": # Only show for Apple GPU or unknown GPU
+        if CONFIG.get("gpu_detection", {}).get("apple", True) and platform.system() == "darwin":
+            if tensortune_core.metal_load_error_reason:
+                if show_optional_lib_warnings:
+                    print_warning(f"  ! Metal (Apple): {tensortune_core.metal_load_error_reason}")
+                    any_vendor_specific_warnings_printed = True
     # Summary message if warnings were suppressed or if everything relevant was okay
     if not show_optional_lib_warnings and CONFIG.get("first_run_completed", False):
         print_info("Optional library status warnings are currently suppressed (configurable in settings).")
@@ -1776,7 +1931,11 @@ def main_cli():
 
         gguf_file_global = gguf_selection_result
         current_model_analysis_global = tensortune_core.analyze_filename(gguf_file_global)
-        
+        current_model_analysis_global = refine_model_analysis_cli(current_model_analysis_global)
+
+        # Apply the refinement after analyzing the model
+        current_model_analysis_global = refine_model_analysis_cli(current_model_analysis_global)
+                
         print_title("Model Actions")
         print_info(f"Selected Model: {os.path.basename(gguf_file_global)}")
         print_info(f"  Analysis: Size ~{current_model_analysis_global.get('size_b', 'N/A')}B, Quant ~{current_model_analysis_global.get('quant', 'N/A')}, MoE: {'Yes' if current_model_analysis_global.get('is_moe') else 'No'}")

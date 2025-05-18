@@ -62,7 +62,7 @@ _CONFIG_FILE_BASENAME = "tensortune_config.json"
 CONFIG_FILE = os.path.join(_get_user_app_config_dir(), _CONFIG_FILE_BASENAME)
 
 _DB_FILE_BASENAME_DEFAULT = "tensortune_history.db"
-CORE_VERSION = "1.0.1-TT" # Core version updated
+CORE_VERSION = "1.2.0" # Core version updated
 
 DEFAULT_CONFIG_TEMPLATE = {
     "koboldcpp_executable": "koboldcpp.exe" if sys.platform == "win32" else "./koboldcpp",
@@ -1423,13 +1423,16 @@ def analyze_filename(filepath: str) -> dict:
     filename_lower = os.path.basename(filepath).lower()
     analysis = {'filepath': filepath, 'is_moe': False, 'quant': 'unknown', 'size_b': 0, 'details': {}, 'num_layers': 32, 'estimated_vram_gb_full_gpu': 0.0}
 
+    # Improve MoE detection
     if 'moe' in filename_lower or 'mixtral' in filename_lower or 'grok' in filename_lower or re.search(r'-a\d+(\.\d+)?[bB]', filename_lower):
         analysis['is_moe'] = True
-
+        
+    # Better model size detection
     quant_match = re.search(r'(q[2-8](?:_[0ksmKSML]{1,2})?|iq[1-4](?:_[smlxSMLX]{1,2})?|bpw\d+|bf16|fp16|f16|f32|ggml|exl\d|awq|gptq|q_k_l|q_k_m|q_k_s|q_k_xl)', filename_lower, re.I)
     if quant_match:
         analysis['quant'] = quant_match.group(1).upper().replace("FP16", "F16")
 
+    # Look for size indicator in filename
     size_match = re.search(r'(?<![a-zA-Z0-9_])(\d{1,3}(?:\.\d{1,2})?)[bB](?![piA-Z0-9_])', filename_lower) or \
                  re.search(r'(?<![a-zA-Z0-9_])(\d{1,3}(?:\.\d{1,2})?)[bB][-_]', filename_lower)
     if size_match:
@@ -1439,56 +1442,11 @@ def analyze_filename(filepath: str) -> dict:
         except ValueError:
             analysis['size_b'] = "N/A_ParseErr"
 
-    current_size_b_val = analysis.get('size_b', 0)
-    file_size_gb = os.path.getsize(filepath) / (1024**3) if os.path.exists(filepath) else 0
-
-    if (isinstance(current_size_b_val, (int, float)) and current_size_b_val == 0) or not isinstance(current_size_b_val, (int, float)):
-        if file_size_gb > 0 and analysis['quant'] != 'unknown':
-            gb_per_b_param_map = {'IQ1': 0.28, 'Q2_0': 0.28, 'Q2_K_S': 0.28, 'IQ2_XS': 0.30, 'IQ2_S': 0.30, 'Q2_K': 0.30,'IQ2': 0.35, 'Q3_0': 0.35, 'Q3_K_S': 0.35, 'IQ3_XS': 0.40, 'IQ3_S': 0.40, 'Q3_K': 0.40, 'Q3_K_M': 0.40, 'Q3_K_L': 0.42,'IQ3_M': 0.50, 'IQ3_L': 0.50, 'Q4_0': 0.50, 'Q4_K_S': 0.53, 'IQ4_XS': 0.55, 'IQ4_S': 0.55, 'Q4_K_M': 0.56,'Q5_0': 0.60, 'Q5_K_S': 0.63, 'Q5_K_M': 0.66, 'Q5_1': 0.65,'Q6_K': 0.75, 'Q8_0': 1.05,'F16': 2.05, 'BF16': 2.05, 'F32': 4.05}
-            est_b_from_file = 0
-            quant_upper = analysis['quant'].upper()
-            if quant_upper in gb_per_b_param_map:
-                est_b_from_file = file_size_gb / gb_per_b_param_map[quant_upper]
-            else:
-                for qk, fv in gb_per_b_param_map.items():
-                    if qk in quant_upper:
-                        est_b_from_file = file_size_gb / fv
-                        break
-            if est_b_from_file == 0 and file_size_gb > 0:
-                est_b_from_file = file_size_gb / 0.6
-
-            if est_b_from_file > 0.5:
-                common_sizes = sorted([1, 1.5, 2.7, 3, 7, 8, 11, 13, 15, 20, 22, 27, 30, 32, 33, 34, 35, 40, 47, 65, 70, 120, 180, 235])
-                if analysis['is_moe'] and ("mixtral" in filename_lower or "8x7" in filename_lower) and abs(est_b_from_file - 47) < 5 :
-                    analysis['size_b'] = 47
-                    analysis['details']['size_is_moe_special'] = "Mixtral 8x7B type"
-
-                if not isinstance(analysis['size_b'], (int,float)) or analysis['size_b'] == 0:
-                    closest_s = min((s for s in common_sizes if isinstance(s, (int,float))), key=lambda x: abs(x - est_b_from_file), default=None)
-                    if closest_s is not None and abs(closest_s - est_b_from_file) < closest_s * 0.25:
-                        analysis['size_b'] = int(closest_s) if float(closest_s).is_integer() else closest_s
-                        analysis['details']['size_is_estimated_from_filesize'] = True
-                    else:
-                        analysis['size_b'] = round(est_b_from_file, 1)
-                        analysis['details']['size_is_estimated_from_filesize_raw'] = True
-        elif file_size_gb == 0 and not isinstance(analysis['size_b'], (int,float)):
-            analysis['size_b'] = "N/A_NoInfo"
-
-    layer_patterns = [r'(\d+)l', r'l(\d+)', r'-(\d+)layers', r'(\d+)layers']
-    model_layer_defaults = {
-        'gemma': {'2b': 18, '7b': 28, 'default': 28},
-        'llama': {'7b': 32, '13b': 40, '30b': 60, '34b':48, '65b': 80, '70b': 80, 'default': 32},
-        'mistral': {'7b': 32, 'default': 32},
-        'mixtral': {'8x7b': 32, 'default': 32},
-        'qwen': {'default': 32},
-        'phi': {'default': 32},
-        'gpt-j': {'6b': 28, 'default': 28},
-        'gpt-neox': {'20b': 44, 'default': 44},
-        'pythia': {'default': 32},
-        'falcon': {'7b': 32, '40b': 60, 'default': 32},
-        'mamba': {'default': 64}
-    }
+    # New: Better layer detection for MoE models
     num_layers_val = None
+    
+    # First check explicit layer markers
+    layer_patterns = [r'(\d+)l', r'l(\d+)', r'-(\d+)layers', r'(\d+)layers']
     for p in layer_patterns:
         m = re.search(p, filename_lower)
         if m:
@@ -1497,11 +1455,30 @@ def analyze_filename(filepath: str) -> dict:
                 break
             except ValueError:
                 pass
+    
+    # Improved model detection (add more common models)
+    model_layer_defaults = {
+        'gemma': {'2b': 18, '7b': 28, 'default': 28},
+        'llama': {'7b': 32, '13b': 40, '30b': 60, '34b': 48, '65b': 80, '70b': 80, 'default': 32},
+        'mistral': {'7b': 32, 'default': 32},
+        'mixtral': {'8x7b': 32, 'default': 32},
+        'qwen': {'default': 32},
+        'phi': {'default': 32},
+        'gpt-j': {'6b': 28, 'default': 28},
+        'gpt-neox': {'20b': 44, 'default': 44},
+        'pythia': {'default': 32},
+        'falcon': {'7b': 32, '40b': 60, 'default': 32},
+        'mamba': {'default': 64},
+        # Add dark-champion model series recognition
+        'dark-champion': {'21b': 48, 'default': 48}
+    }
 
+    # Check model family matches before falling back to size-based
     if num_layers_val is None:
         size_b_for_layers = analysis['size_b'] if isinstance(analysis['size_b'], (int,float)) else 0.0
         if isinstance(size_b_for_layers, int): size_b_for_layers = float(size_b_for_layers)
 
+        # Try to detect model family
         for model_key_iter, layer_config_iter in model_layer_defaults.items():
             if model_key_iter in filename_lower:
                 if isinstance(layer_config_iter, dict):
@@ -1523,8 +1500,18 @@ def analyze_filename(filepath: str) -> dict:
                         break
                 break
 
+    # Improved: Look for specific clues in filename for multilayer MoE models
+    if 'dark-champion' in filename_lower or 'inst-21b' in filename_lower:
+        if analysis['is_moe']:
+            # Special handling for Dark Champion series
+            num_layers_val = 48
+            # Mark this as found via special family rule
+            analysis['details']['layers_via_model_family'] = 'dark-champion-moe'
+
+    # Enhanced layer detection by model size (if still not found)
     if num_layers_val is None and isinstance(analysis['size_b'], (int, float)):
         s_b = analysis['size_b']
+        # Better scaling for large models
         if s_b <= 1.5: num_layers_val = 22
         elif s_b <= 3: num_layers_val = 26
         elif s_b <= 7: num_layers_val = 32
@@ -1534,8 +1521,16 @@ def analyze_filename(filepath: str) -> dict:
         elif s_b <= 70: num_layers_val = 80
         else: num_layers_val = 96
 
+    # Special case for MoE models that might have meta-layer structure
+    if analysis['is_moe'] and 'mixtral' not in filename_lower and num_layers_val is not None:
+        # Check if this is a large MoE model; if so, ensure we have enough layers
+        if analysis['size_b'] >= 20 and num_layers_val < 40:
+            num_layers_val = max(num_layers_val, 48)  # Ensure at least 48 layers for large MoE models
+
+    # Store final layer count
     analysis['num_layers'] = num_layers_val if num_layers_val is not None else 32
 
+    # Rest of the function remains the same...
     vram_gb_per_b_param = {
         'F32': 4.5, 'BF16': 2.5, 'F16': 2.5, 'Q8_0': 1.5,
         'Q6_K': 1.1, 'Q5_K_M': 0.95, 'Q5_K_S': 0.90, 'Q5_0': 0.90, 'Q5_1':0.95,
@@ -1562,39 +1557,104 @@ def analyze_filename(filepath: str) -> dict:
     analysis['estimated_vram_gb_full_gpu'] = round(est_vram_gb_val, 2)
     return analysis
 
+      
 def get_gpu_layers_for_level(model_analysis: dict, attempt_level: int) -> int:
+    """
+    Completely revised function to determine GPU layers based on analysis and level.
+    Provides more appropriate transitions for different model types and sizes.
+    """
     total_layers = model_analysis.get('num_layers', 32)
     is_moe = model_analysis.get('is_moe', False)
-
+    size_b = model_analysis.get('size_b', 0)
+    
+    # Apply sanity checks to total_layers
     if not isinstance(total_layers, int) or total_layers <= 0:
-        total_layers = 32
-
+        # Use fallback based on model size if available
+        if isinstance(size_b, (int, float)) and size_b > 0:
+            if size_b <= 7: total_layers = 32
+            elif size_b <= 20: total_layers = 48
+            elif size_b <= 40: total_layers = 60
+            else: total_layers = 80
+        else:
+            total_layers = 32  # Default if we have no info
+    
+    # Ensure we return at least 1 layer
+    min_layers = 1
+    
+    # Use 999 as a special value meaning "all layers"
+    all_layers = 999
+    
+    # Debug message storage
+    debug_info = f"Layer calc: Total={total_layers}, MoE={is_moe}, Level={attempt_level}"
+    
+    # For MoE Models - completely revised scaling
     if is_moe:
-        if attempt_level <= -23: return 999
-        elif attempt_level <= -19: return int(total_layers * 0.95)
-        elif attempt_level <= -16: return int(total_layers * 0.90)
-        elif attempt_level <= -13: return int(total_layers * 0.85)
-        elif attempt_level <= -10: return int(total_layers * 0.80)
-        elif attempt_level <= -7: return int(total_layers * 0.75)
-        elif attempt_level <= -4: return int(total_layers * 0.70)
-        elif attempt_level <= -1: return int(total_layers * 0.60)
-        elif attempt_level <= 2: return int(total_layers * 0.50)
-        elif attempt_level <= 5: return int(total_layers * 0.40)
-        elif attempt_level <= 8: return int(total_layers * 0.30)
-        else: return max(0, int(total_layers * 0.20))
+        # Create a more granular transition from CPU-focused to GPU-focused
+        if attempt_level >= 10:
+            # Very CPU-heavy (almost everything on CPU)
+            return min_layers
+        elif attempt_level >= 5:
+            # CPU-focused
+            percent = 0.05 + (0.10 * (10 - attempt_level) / 5.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= 0:
+            # Balanced but CPU-leaning
+            percent = 0.15 + (0.15 * (5 - attempt_level) / 5.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= -10:
+            # Balanced with gradual shift to GPU
+            # Smoothly transition from 30% to 65% GPU
+            percent = 0.30 + (0.35 * (abs(attempt_level)) / 10.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= -20:
+            # GPU-focused
+            # Smoothly transition from 65% to 90%
+            percent = 0.65 + (0.25 * (abs(attempt_level) - 10) / 10.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= -24:
+            # Nearly maximum GPU
+            percent = 0.90 + (0.10 * (abs(attempt_level) - 20) / 5.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        else:  # attempt_level <= -25
+            # Maximum GPU: use all layers
+            return all_layers
+        
+    # For Dense Models
     else:
-        if attempt_level <= -15: return 999
-        elif attempt_level <= -12: return int(total_layers * 0.95)
-        elif attempt_level <= -10: return int(total_layers * 0.90)
-        elif attempt_level <= -8: return int(total_layers * 0.85)
-        elif attempt_level <= -6: return int(total_layers * 0.80)
-        elif attempt_level <= -4: return int(total_layers * 0.70)
-        elif attempt_level <= -2: return int(total_layers * 0.60)
-        elif attempt_level <= 0: return int(total_layers * 0.50)
-        elif attempt_level <= 2: return int(total_layers * 0.40)
-        elif attempt_level <= 4: return int(total_layers * 0.30)
-        elif attempt_level <= 7: return int(total_layers * 0.20)
-        else: return max(0, int(total_layers * 0.10))
+        # Create a more granular transition for dense models
+        if attempt_level >= 7:
+            # Very CPU-heavy
+            return min_layers
+        elif attempt_level >= 3:
+            # CPU-focused
+            percent = 0.05 + (0.15 * (7 - attempt_level) / 4.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= 0:
+            # Balanced
+            percent = 0.20 + (0.20 * (3 - attempt_level) / 3.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= -10:
+            # Gradually increasing GPU
+            # From 40% to 80%
+            percent = 0.40 + (0.40 * abs(attempt_level) / 10.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        elif attempt_level >= -16:
+            # Heavy GPU focus
+            percent = 0.80 + (0.20 * (abs(attempt_level) - 10) / 6.0)
+            layer_count = max(min_layers, int(total_layers * percent))
+            return layer_count
+        else:  # attempt_level <= -17
+            # Maximum GPU: use all layers 
+            return all_layers
+    
 
 def get_level_from_overridetensors(override_tensor_str: Optional[str], model_analysis: dict) -> int:
     is_moe = model_analysis.get('is_moe', False)
@@ -1615,33 +1675,76 @@ def get_level_from_overridetensors(override_tensor_str: Optional[str], model_ana
         return -8
 
 def get_offload_description(model_analysis: dict, attempt_level: int, current_ot_string: Optional[str]) -> str:
-      if current_ot_string == "FAILURE_MAX_ATTEMPTS": return "MAX ATTEMPTS REACHED. No further CPU offload possible."
-      is_moe, total_model_layers = model_analysis.get('is_moe', False), model_analysis.get('num_layers', 32)
-      if not isinstance(total_model_layers, int) or total_model_layers <=0: total_model_layers = 32
-      
-      desc_map_data = {
-          True: {10:"MoE ULTRA MAX CPU", 8:"MoE SUPER MAX CPU", 6:"MoE SUPER CPU++", 4:"MoE SUPER CPU+", 2:"MoE SUPER CPU", 1:"MoE SUPER MAX EXPERT CPU",0:"MoE MAX EXPERT CPU", -2:"MoE CPU++", -4:"MoE CPU+", -6:"MoE CPU/GPU Bal++", -8:"MoE CPU/GPU Bal+", -10:"MoE GPU Focus",-12:"MoE GPU+", -15:"MoE GPU++", -18:"MoE GPU+++", -21:"MoE GPU++++", -25:"MoE MAX GPU"},
-          False: {9:"Dense ULTRA MAX CPU", 7:"Dense SUPER MAX CPU", 5:"Dense SUPER CPU", 3:"Dense SUPER CPU-", 0:"Dense MAX FFN CPU", -1:"Dense CPU++",-3:"Dense CPU+", -5:"Dense GPU Focus", -7:"Dense GPU+", -9:"Dense GPU++", -11:"Dense GPU+++", -14:"Dense GPU++++", -17:"Dense MAX GPU"}
-      }
-      desc_map = desc_map_data[is_moe]
-      
-      applicable_keys = [k for k in desc_map if k <= attempt_level]
-      closest_key = max(applicable_keys) if applicable_keys else min(desc_map.keys())
-      base_desc_from_map = f"{'MoE' if is_moe else 'Dense'} Level {attempt_level} (near '{desc_map.get(closest_key, 'Custom')}')" if attempt_level not in desc_map else desc_map.get(attempt_level, f"{'MoE' if is_moe else 'Dense'} Custom (Lvl {attempt_level})")
-
-      gpu_layers_count_for_this_level = get_gpu_layers_for_level(model_analysis, attempt_level) # This will be used
-      ot_str_preview = current_ot_string[:30] + '...' if current_ot_string and len(current_ot_string) > 30 else current_ot_string
-      
-      layers_info: str
-      if current_ot_string:
-          layers_info = (f"Cmd uses '--gpulayers {gpu_layers_count_for_this_level}'. "
-                         f"OT string ('{ot_str_preview}') also handles CPU offload. "
-                         f"({total_model_layers} total layers)")
-      else:
-          layers_info = (f"Cmd will use '--gpulayers {gpu_layers_count_for_this_level}'. "
-                         f"(Based on level {attempt_level}, {total_model_layers} total layers). No OT string.")
-      
-      return f"{base_desc_from_map}. {layers_info}"
+    if current_ot_string == "FAILURE_MAX_ATTEMPTS": return "MAX ATTEMPTS REACHED. No further CPU offload possible."
+    is_moe, total_model_layers = model_analysis.get('is_moe', False), model_analysis.get('num_layers', 32)
+    if not isinstance(total_model_layers, int) or total_model_layers <= 0: total_model_layers = 32
+    
+    # Calculate the gpu layers that will be used for this level
+    gpu_layers_count_for_this_level = get_gpu_layers_for_level(model_analysis, attempt_level)
+    
+    # More detailed MoE descriptions
+    desc_map_moe = {
+        10: "MoE ULTRA MAX CPU",
+        8: "MoE SUPER MAX CPU",
+        6: "MoE SUPER CPU++",
+        4: "MoE SUPER CPU+",
+        2: "MoE SUPER CPU",
+        1: "MoE SUPER MAX EXPERT CPU",
+        0: "MoE MAX EXPERT CPU",
+        -2: "MoE CPU++",
+        -4: "MoE CPU+",
+        -6: "MoE CPU/GPU Bal++",
+        -8: "MoE CPU/GPU Bal+",
+        -10: "MoE GPU Focus",
+        -12: "MoE GPU+",
+        -15: "MoE GPU++",
+        -18: "MoE GPU+++",
+        -21: "MoE GPU++++",
+        -24: "MoE MAX GPU",
+        -25: "MoE ABSOLUTE MAX GPU"
+    }
+    
+    # More detailed Dense descriptions
+    desc_map_dense = {
+        9: "Dense ULTRA MAX CPU",
+        7: "Dense SUPER MAX CPU",
+        5: "Dense SUPER CPU",
+        3: "Dense SUPER CPU-",
+        0: "Dense MAX FFN CPU",
+        -1: "Dense CPU++",
+        -3: "Dense CPU+",
+        -5: "Dense GPU Focus",
+        -7: "Dense GPU+",
+        -9: "Dense GPU++",
+        -11: "Dense GPU+++",
+        -14: "Dense GPU++++",
+        -17: "Dense MAX GPU"
+    }
+    
+    desc_map = desc_map_moe if is_moe else desc_map_dense
+    
+    applicable_keys = [k for k in desc_map if k <= attempt_level]
+    closest_key = max(applicable_keys) if applicable_keys else min(desc_map.keys())
+    
+    # Include GPU layers info
+    base_desc_from_map = f"{'MoE' if is_moe else 'Dense'} Level {attempt_level} (near '{desc_map.get(closest_key, 'Custom')}')"
+    if attempt_level in desc_map:
+        base_desc_from_map = desc_map.get(attempt_level, f"{'MoE' if is_moe else 'Dense'} Custom (Lvl {attempt_level})")
+    
+    gpu_layers_display = f"{gpu_layers_count_for_this_level}"
+    if gpu_layers_count_for_this_level == 999:
+        gpu_layers_display = "ALL"
+    
+    layers_info = ""
+    if current_ot_string:
+        layers_info = (f"Cmd uses '--gpulayers {gpu_layers_display}'. "
+                       f"OT string handles detailed CPU offload. "
+                       f"(Model has {total_model_layers} total layers)")
+    else:
+        layers_info = (f"Cmd will use '--gpulayers {gpu_layers_display}'. "
+                       f"(Based on level {attempt_level}, {total_model_layers} total layers). No OT string.")
+    
+    return f"{base_desc_from_map}. {layers_info}"
 
 def generate_overridetensors(model_analysis: dict, attempt_level: int) -> Optional[str]:
     moe_s, dense_s = "_exps\\.weight", "\\.weight"; d, u, g = "ffn_down", "ffn_up", "ffn_gate"
@@ -1756,11 +1859,13 @@ def format_command_for_display(cmd_list):
 def get_command_to_run(executable_path, args_list):
     return [sys.executable, executable_path] + args_list if executable_path.lower().endswith(".py") else [executable_path] + args_list
 
+      
 def build_command(model_path: str,
                     override_tensor_str_from_tuning: Optional[str],
                     model_analysis: dict,
                     session_base_args_dict: dict,
-                    current_attempt_level_for_tuning: Optional[int] = None) -> List[str]: # Added new param
+                    current_attempt_level_for_tuning: Optional[int] = None,
+                    manual_gpu_layers_override: Optional[int] = None) -> List[str]:
       current_cmd_args_dict = session_base_args_dict.copy()
       current_cmd_args_dict["--model"] = model_path
       model_analysis_dict = model_analysis if isinstance(model_analysis, dict) else {}
@@ -1786,27 +1891,33 @@ def build_command(model_path: str,
           current_cmd_args_dict["--overridetensors"] = override_tensor_str_from_tuning
           # When OT is active, gpulayers is determined by the tuning level (if provided)
           # or from session_base_args if level isn't specified (e.g. launching a remembered config)
-          num_gpu_layers_for_ot_case: str
-          if current_attempt_level_for_tuning is not None:
-              num_gpu_layers_for_ot_case = str(get_gpu_layers_for_level(model_analysis_dict, current_attempt_level_for_tuning))
-          else:
-              # OT string is present, but no current tuning level context (e.g., direct launch with a pre-set OT string from model_specific_args, or history)
-              # Use gpulayers from session_base_args (which might be from global/model-specific config)
-              # or default to 999 if not specified, to let OT fully control eligible layers if no other gpulayers info.
-              num_gpu_layers_for_ot_case = str(session_base_args_dict.get("--gpulayers", "999"))
-          current_cmd_args_dict["--gpulayers"] = num_gpu_layers_for_ot_case
-      else: # No OT string from tuning (or FAILURE_MAX_ATTEMPTS was hit)
-          if "--overridetensors" in current_cmd_args_dict: # Ensure no stale OT string from base_args
+      if manual_gpu_layers_override is not None:
+          # Manual GPU layers override is provided
+          current_cmd_args_dict["--gpulayers"] = str(manual_gpu_layers_override)
+          if override_tensor_str_from_tuning and override_tensor_str_from_tuning != "FAILURE_MAX_ATTEMPTS":
+              current_cmd_args_dict["--overridetensors"] = override_tensor_str_from_tuning
+          elif "--overridetensors" in current_cmd_args_dict: # No OT from tuning, remove if in base
               del current_cmd_args_dict["--overridetensors"]
-
-          # When no OT, gpulayers determined by tuning level (if provided) or from session_base_args_dict
-          num_gpu_layers_no_ot_case: str
-          if current_attempt_level_for_tuning is not None:
-              num_gpu_layers_no_ot_case = str(get_gpu_layers_for_level(model_analysis_dict, current_attempt_level_for_tuning))
-          else:
-              # This is for direct launch without tuning, use configured gpulayers
-              num_gpu_layers_no_ot_case = str(session_base_args_dict.get("--gpulayers", DEFAULT_CONFIG_TEMPLATE["default_args"].get("--gpulayers", "auto")))
-          current_cmd_args_dict["--gpulayers"] = num_gpu_layers_no_ot_case
+      else:
+          # Auto GPU Layers logic (existing logic, slightly restructured)
+          if override_tensor_str_from_tuning and override_tensor_str_from_tuning != "FAILURE_MAX_ATTEMPTS":
+              current_cmd_args_dict["--overridetensors"] = override_tensor_str_from_tuning
+              num_gpu_layers_for_ot_case: str
+              if current_attempt_level_for_tuning is not None:
+                  num_gpu_layers_for_ot_case = str(get_gpu_layers_for_level(model_analysis_dict, current_attempt_level_for_tuning))
+              else:
+                  num_gpu_layers_for_ot_case = str(session_base_args_dict.get("--gpulayers", "999")) # Default if no level
+              current_cmd_args_dict["--gpulayers"] = num_gpu_layers_for_ot_case
+          else: # No OT string from tuning
+              if "--overridetensors" in current_cmd_args_dict:
+                  del current_cmd_args_dict["--overridetensors"]
+                
+              num_gpu_layers_no_ot_case: str
+              if current_attempt_level_for_tuning is not None:
+                  num_gpu_layers_no_ot_case = str(get_gpu_layers_for_level(model_analysis_dict, current_attempt_level_for_tuning))
+              else: # Direct launch without tuning, use configured
+                  num_gpu_layers_no_ot_case = str(session_base_args_dict.get("--gpulayers", DEFAULT_CONFIG_TEMPLATE["default_args"].get("--gpulayers", "auto")))
+              current_cmd_args_dict["--gpulayers"] = num_gpu_layers_no_ot_case
 
       # Handle gpulayers 'auto', 'off', '0' and --nogpulayers flag
       # This must come AFTER gpulayers is determined above.
