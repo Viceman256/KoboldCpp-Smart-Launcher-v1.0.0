@@ -1,4 +1,4 @@
-# TensorTune v1.1.1
+# TensorTune v1.2.0
 
 TensorTune is a user-friendly toolkit for efficiently running KoboldCpp, intelligently managing VRAM usage through optimized tensor offload strategies to maximize performance on consumer GPUs. Available in both GUI and CLI versions.
 
